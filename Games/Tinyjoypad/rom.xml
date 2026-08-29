@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rom-definition version="1.0">
+    <rom title="tinyjoypad" type="cartridge" version="1.0"/>
+    <binary path="obj/main.vbin"/>
+    <textures>
+        <texture path="obj/columns.vtex"/>
+        <texture path="obj/thumbnails.vtex"/>
+        <texture path="obj/thumbnails2.vtex"/>
+        <texture path="obj/pixelgrid.vtex"/>
+        <texture path="obj/thumbnails3.vtex"/>
+        <texture path="obj/thumbnails4.vtex"/>
+    </textures>
+    <sounds>
+        <sound path="obj/wt_saw.vsnd"/>
+    </sounds>
+</rom-definition>

@@ -1,0 +1,11266 @@
+# TinyJoypad → Vircon32 Port
+
+## Goal
+
+Port a selection of TinyJoypad games (originally written for the ATtiny85 +
+SSD1306 128x64 monochrome OLED) into a single Vircon32 cartridge, presented
+behind one shared game-select menu — the same overall shape as
+crisp-game-lib-portable's "one binary, many games, addGame() menu" pattern,
+and reusing lessons learned from the playdate-arduboy (srcstub) compatibility
+layer.
+
+This file is project context for Claude Code. Read it before making changes,
+and keep it updated as decisions get made — it should stay a reliable summary
+of the architecture and open questions, not just a one-time brief.
+
+## `more games/` — staged source for future ports
+
+`more games/` (repo root) holds unmodified upstream sources for every
+TinyJoypad game found on tinyjoypad.com/tinyjoypad_attiny85, fetched so a
+future porting pass doesn't need to re-download anything:
+- GitHub-hosted (git clones, full history not kept - `--depth 1`):
+  `Tiny-invaders-v4.2`, `TinyDungeon`, `TinyMinez` (all hosted under the
+  `Lorandil` GitHub account - see the Licensing section for what each
+  game's own header actually credits as its programmer, which isn't
+  always "Lorandil" itself),
+  `TinyLanderV1.0` (tscha70), `TinyJoypadWorks` (Obono - a monorepo: its own
+  `hollowseeker/`, `numberplace/`, and `t2048/` subfolders are 3 games in
+  one clone).
+- Official "Tiny X" games (Google Drive-only, no public GitHub source) -
+  downloaded and unzipped directly: `Tiny Arena`, `Tiny Doc`,
+  `Tiny SQuest`, `Tiny Pipe`, `Tiny Morpion`, `Tiny Missile`, `Tiny DDug`,
+  `Tiny Plaque`, `Tiny Tris`, `Tiny Trick`, `Tiny Bike`, `Tiny Bert`,
+  `Tiny Bomber`, `Tiny Arkanoid`, `Tiny Pacman`, `Tiny Pinball`,
+  `Tiny Gilbert`, `TESTMODE`, `Tiny Mania` (staged 2026-08-05, the newest
+  listing on tinyjoypad.com at the time - first release dated 2026-08-04
+  on the site itself; Programmer: Daniel C 2026, GPLv3, same
+  `ELECTROLIB.h`/`FastTinyDriver.h` lineage as most other Daniel-C titles
+  here - a Pac-Man-style maze/ghost-chase game per its own globals
+  (`PacLives`/`NbGhosts`/`GobModeTimer`/`TotalDotsCollected`), but with its
+  own `JmpSeq`/`JmpTrig`/`JmpPos` jump mechanic not present in the
+  already-shipped `Tiny Pacman` - the signature addition of the real
+  arcade game "Pac-Mania" this name references, suggesting a genuinely
+  distinct title rather than a duplicate, though not yet diffed/triaged
+  against `Tiny Pacman` line-by-line the way this project's other
+  genre-lookalike candidates have been before committing to port).
+- Not fetched: the official "Tiny Invaders" Drive download (redundant -
+  `Tiny-invaders-v4.2`'s GitHub clone already has full source, the Drive
+  link is just a compiled `.hex`) and the 3 "non-joypad-compatible"
+  projects the site lists (Simon, VU Meter, Tinyscope - not TinyJoypad
+  games, wrong input/display shape to port here).
+- `gametiny` (cheungbx, GitHub) - a *different* author's ATtiny85+SSD1306
+  console project ("inspired by" TinyJoypad, not affiliated with
+  tinyjoypad.com), cloned whole for its **unique** games not found
+  anywhere on tinyjoypad.com itself: `BatBonanzaAttinyArcade`,
+  `Frogger_Attiny_Arcade`, `SpaceAttackAttiny` (+ a `SpaceAttackAttiny2but`
+  variant), the multi-button falling-block puzzle game's own upstream
+  folder, `UFO_Breakout_Arduino`, `UFO_Stacker_Attiny`,
+  `WrenRollercoasterAttinyArcade`. Its other subfolders (`tinyarkanoid`,
+  `tinybomber`, `tinygilbert`, `tinypacman`, `tinyPinball`,
+  `Tiny_space_invaders`, `MorseAttinyArcade`, `Test_ATtiny`) are either
+  duplicates of games already collected above or not games (a Morse
+  practice tool, a hardware test sketch) - skip those, they add nothing
+  new.
+  - **Re-verified directly against source (not just by genre) on direct
+    user request**, since an earlier pass had excluded `SpaceAttackAttiny`/
+    the falling-block game's own folder/`UFO_Breakout_Arduino`'s own
+    Breakout half purely because they share a genre with an already-
+    shipped game, without actually diffing the code - the user
+    specifically pushed back on that reasoning. Direct diffs/reads
+    confirmed: `tinyarkanoid`/`tinybomber`/`tinygilbert`/`tinypacman`/
+    `tinyPinball` really are older, pre-`FastTinyDriver` revisions of
+    Daniel C's own already-shipped tinyjoypad.com games (same variable
+    names/physics, small mechanical diffs only - confirmed via `diff`);
+    `Tiny_space_invaders` really is an earlier ~v3.1-equivalent revision
+    of Daniel Champagne's own "Tiny Invaders" (481 lines, a 158-line diff
+    against the `tiny-handheld` bundle's own v3.1 copy vs. a 1370-line
+    diff against the shipped v4.2) - genuinely the predecessor of what's
+    already shipped, not a lookalike. But `SpaceAttackAttiny` ("SpaceAttack"
+    by Andy Jackson - mothership bonus enemy, EEPROM highscore, its own
+    distinct sprite/scoring code, confirmed via direct read to share
+    nothing but genre with Tiny Invaders), the falling-block game's own
+    folder (Andy Jackson's own falling-block puzzle clone, "essentially a
+    clone of [a well-known falling-block puzzle game named after a Russian
+    word for "seven"] by Anthony Russell...rewritten from scratch" per its
+    own header - confirmed distinct from Daniel C's Tiny Tris), and
+    `UFO_Breakout_Arduino`'s own `playBreakout()` half (Ilya Titov's own
+    Breakout clone - a `row[3][16]` block grid + `hdir`/`vdir` ball-
+    direction model, confirmed structurally distinct from Tiny Arkanoid via
+    direct read) were all wrongly excluded on genre-similarity alone -
+    real, distinct, unported games. (This same file's own `playUFO()` half
+    *was* correctly identified as a duplicate - a 34-line diff against the
+    already-shipped `UFO_Stacker_Attiny` copy confirmed it's the same
+    game, just missing a small fire-debounce fix the shipped copy has -
+    only `playBreakout()` is new.) `SpaceAttackAttiny2but` is confirmed
+    (via a 119-line, all-comment/control-mapping diff) to be a 2-button-
+    hardware control variant of the same `SpaceAttackAttiny` game, not a
+    separate title - only the non-`2but` version (using TinyJoypad's own
+    real dedicated fire button, matching this project's own established
+    preference for the native control mapping when multiple hardware-
+    target variants exist) needs porting. All three real finds -
+    SpaceAttack, the falling-block game (credited in the menu as "FALLING
+    BLOCKS" - deliberately not naming the genre it's a clone of anywhere
+    in this project's own menu or documentation, since that name is a
+    registered trademark; the game's own title *screen* still shows it,
+    baked into the original ROM's own decorative logo/text data, not
+    something this project chose to display), and Breakout - are now in
+    scope; see Status below for their own writeups as each is ported.
+- tinyjoypad.com's separate Arduboy and ESP8285 platform pages mostly
+  re-list the same games above, but also include 3 Arduboy-exclusive
+  titles (`Ardumania`, `Nohzdyve`, `Gilbert in the Downland`) originally
+  written for Arduboy's beefier hardware (real buttons, more RAM/flash)
+  rather than ATtiny85's analog-ladder input and 512B RAM - this file
+  previously called these out of scope for that reason and left them
+  unfetched. **Corrected, 2026-08-07, after the user linked a Google-
+  Drive-hosted `MEGAcompilation160mhz.zip`** (Daniel C's own combined
+  cartridge for the *third* TinyJoypad hardware target, ESP8285/ESP8266 -
+  never fetched before this) and asked specifically about these 3 titles:
+  that compilation bundles ESP-ported versions of nearly every already-
+  shipped Daniel-C game **plus these 3 Arduboy-exclusive ones**, all
+  routed through a shared `DATA/MEGA_LIB/ESPKIT.h` compatibility shim -
+  Daniel C himself already adapted them off raw Arduboy2 hardware calls
+  onto a plain PROGMEM/framebuffer model with a `[width,height]`-header
+  sprite-table format and a `MEGA_Sound()`/`MEGA_PLAY_MUSIC()` using the
+  *exact same* tone formula as `ELECTROLIB.h`'s own shared `Sound()`, and
+  input reduced to simple digital-pin macros literally named
+  `TINYJOYPAD_LEFT/RIGHT/UP/DOWN`/`BUTTON_DOWN`/`BUTTON_UP` - a near-
+  direct match for this project's own `isLeftPressed()`-style shim rather
+  than anything ESP-specific. All 3 target files are plain C-style (zero
+  C++ classes, just structs) with goto/while(1) counts (4-10 each) in the
+  same range as several already-shipped Tier-2 games, and each carries
+  its own "relicensed under GPLv3" header from Daniel C specifically for
+  this ESP port. **No longer out of scope** - staged into `more games/
+  MEGAcompilation_ESP/` (just the 3 target games' own folders + the
+  shared `MEGA_LIB/ESPKIT.h` + `COPYING.txt`, not the whole compilation's
+  duplicate copies of already-shipped games) for a future porting pass.
+  Confirmed distinct from anything already shipped: Ardumania is an
+  isometric-scrolling Pac-Man-style maze chase (ghosts, fruit, camera-
+  grid scroll); Nohzdyve is a descent/dive arcade game; Gilbert in the
+  Downland is an 11-room rope-and-chamber climbing platformer with acid-
+  drop hazards - a different game from the already-shipped "Tiny
+  Gilbert" despite the shared character name (confirmed via structure,
+  not just the name). A follow-up deep-read audit (checking all 3 games'
+  own supporting engine/sprite files, not just their top-level `*-ESP.h`)
+  found the "zero C++ classes" claim above only held for those top-level
+  files - the supporting `engineOBJ*.h` files do have classes, including
+  a shallow 3-way shared-base inheritance in Gilbert's own
+  `engineOBJ_GITD.h` - the same already-solved flatten-to-struct shape as
+  Tiny Missile/Tiny Pipe, not a new blocker. **All 3 titles have since
+  shipped** (Nohzdyve and Gilbert in the Downland first, Ardumania last -
+  see each one's own writeup in Status below) - this staged folder's own
+  porting pass is now fully closed out, with no remaining candidates.
+- `sample` - 3 original ATtiny85/Tiny Joypad games by 近藤さんちの研究室
+  ("Kondo-san's Laboratory", note.com handle `kondolab`), placed into this
+  folder directly by the user (not git-cloned/downloaded by this session) -
+  a `source.txt` in the folder lists the author's note.com profile plus 4
+  article URLs, fetched via WebFetch to identify each game's real title/
+  description/source-download link rather than guessing from the raw
+  folder names. All three are built with heavy Google Gemini AI assistance
+  (each article documents this explicitly, including the author's own
+  "rules for creating games with AI" - e.g. "have multiple AI chatrooms
+  verify code, since AI tends to validate its own work optimistically
+  without rigorous checking"), and none states an explicit license for the
+  game's own code (no MIT/GPL/"free to use" text found on any of the 3
+  article pages - only the referenced `gametiny`/`ssd1306xled` libraries
+  are confirmed GPLv3) - treat as "None specified" per this project's own
+  precedent for Four in a Row/Dino Game/SnakeGame85 unless a clearer
+  statement turns up later.
+  - `attiny85AIjump5`/`attiny85AIjump6` - **"JUMP SLIME"** (folder name
+    "AIjump" is the user's own local naming, not the author's title) - a
+    jump-action platformer starring a slime, article:
+    https://note.com/kondolab/n/ndc93ac31e555 (published 2025-07-06),
+    source download `sample.zip` linked from that article. The two
+    folders are NOT different games - `jump6`'s `.ino` is a strict
+    superset of `jump5`'s (confirmed via a line-ending-normalized diff,
+    since `jump6` is saved with CRLF line endings and `jump5` with LF,
+    which made a naive `diff` initially look like every line changed);
+    `jump6` just adds a 5th stage (`stage5_blocks`/`stage5_enemies` and
+    their wiring into the existing per-stage tables) on top of `jump5`'s
+    otherwise-identical code, and its file timestamp (2025-07-18) is 11
+    days later than `jump5`'s (2025-07-07) - a later revision, not a
+    separate title. **Ported** (from `jump6`) as `src/games/gameJumpSlime.c`
+    - see Status below for the full writeup.
+  - `attiny85Bttle13Boss` - **"TinY Fi"** (folder name "Bttle13Boss" is
+    again the user's own local naming) - a fighting game across 6 stages
+    against enemies/bosses, described by the author as "a simple fighting
+    game mixed with belt-scroll action" (memory-constrained by the
+    ATtiny85's 8KB flash) with punch/kick/uppercut/jump/jump-kick moves,
+    article: https://note.com/kondolab/n/n2c96413eaa23 (published
+    2025-11-03), source download `sample4.zip` linked from that article,
+    also playable via an embedded Wokwi simulator
+    (https://wokwi.com/projects/446512906551374849). **Ported** as
+    `src/games/gameTinYFi.c` - see Status below for the full writeup.
+  - `Cave11Item` - **"TinyRoG"** (folder name references its own
+    `CAVEDATA.h`/cave theme, not the author's title) - a roguelike RPG
+    with procedurally-generated mazes across 30 floors
+    (`CLEAR_FLOOR 30` in the port's own source confirms this against the
+    article's own "30 floors of increasing difficulty" description),
+    enemy encounters, and turn-based combat, aiming for "different
+    gameplay each time" (inspired by Torneko's Great Adventure, i.e. a
+    Mystery-Dungeon-style roguelike). Two articles cover this game: a
+    concept/part-1 piece, "Google Gemini と「100回遊べるRPG」製作"
+    (https://note.com/kondolab/n/ndb6bf9c5b9d6, published 2025-08-23
+    09:09, no source code) and the part-2/finished-game piece, "Google
+    Gemini と「100回遊べるRPG」製作（後編）"
+    (https://note.com/kondolab/n/n1806e4234495, published 2025-08-23
+    14:09), which gives the game its real name "TinyRoG" and the source
+    download `sample3.zip`, plus an embedded Wokwi simulator (noted by
+    the author as slower than real hardware). **Ported** as
+    `src/games/gameTinyRoG.c` - see Status below for the full writeup.
+- A fourth beyond-scope discovery pass (staged 2026-08-06), triggered by a
+  direct user request to search more broadly for ATtiny85/TinyJoypad-
+  compatible games - including Chinese/Japanese/Korean-language sites,
+  since the project's prior beyond-scope searches (see "Beyond the
+  original scope" below) had been English/GitHub-only. Every Chinese/
+  Japanese/Korean-language result found (Zhihu, CSDN, Bilibili, several
+  hatenablog/note.com/Qiita/ameblo posts, inajob's blog) turned out to be
+  a build log or hardware clone for playing the *already-known*
+  tinyjoypad.com game library, not a source of new original games -
+  chasing GitHub's own long tail of forks/derivatives (checked and ruled
+  out as pure re-bundles of already-catalogued games: `RoboCY/Tinycade`,
+  `PraneelBhatia/GameIT-Retro-Gameboy`, `rzeldent/attiny85-arcade`,
+  `pyropotato/ATTiny85-game-console`, `upiir/tinycade_attiny85_games`;
+  ruled out as wrong hardware shape: `shepherdingelectrons/ATtiny85Mario`
+  needs *twin* OLEDs, `1d438ef6/AtTiny-1D-GameConsole` is a WS2812 LED-
+  strip console not SSD1306; ruled out as not a real game collection:
+  `bitbank2/oled_sprites`, a rendering library with no bundled game; ruled
+  out as already-excluded-by-precedent: `EthanDP/mini-arcade`'s Simon,
+  same reasoning as tinyjoypad.com's own already-excluded Simon/VU-Meter)
+  is what turned up 4 real, previously-uncatalogued candidates instead:
+  - `attiny-astro-barrier` (Sean Price, GitHub `SeanP2001`, GPLv3) - a
+    17-level shooter (move left/right, shoot 3 fixed targets per level
+    before running out of bullets, EEPROM high score). Uses the exact
+    same `ssd1306xled` driver family already in this project's shim, and
+    a 3-button analog voltage ladder (`A2`=direction, `A3`=action)
+    structurally close to TinyJoypad's own scheme - real multi-file C++
+    (`Bullet`/`Player`/`Target`/`Screens`/`Sound` classes each their own
+    `.h`/`.cpp`), not a single-file sketch. The closest hardware match of
+    the 4 - and it turned out to be the lowest-effort of this batch, as
+    expected. **Ported** as `src/games/gameAstroBarrier.c` - see Status
+    below for the full writeup.
+  - `attiny-snake` (Sean Price, GitHub `SeanP2001`, GPLv3) - same author/
+    hardware/license/`ssd1306xled` lineage as Astro Barrier above, a
+    full 4-absolute-direction (not relative-turn) Snake. Genre-duplicates
+    the already-shipped Oroboros (relative-turn) and SnakeGame85
+    (absolute-direction, like this one) - confirmed via direct reading (not
+    genre alone) to be a genuinely distinct, from-scratch codebase (its own
+    real singly-linked-list body representation, its own `ssd1306xled`-
+    based 16x8-grid rendering, sharing no code with either sibling).
+    **Ported** as `src/games/gameAttinySnake.c` (menu title "ATTINY SNAKE")
+    - see Status below for the full writeup.
+  - `ATtiny-Tetris-Gold` (Jarosław Mazurkiewicz, GitHub `jaromaz`; mixed/
+    non-commercial license - the file's own header: "The code that does
+    not fall under the licenses of sources listed below can be used
+    non-commercially with or without attribution") - built directly on
+    Andy Jackson's/Neven Boyanov's own lineage (its own header credits
+    "Andy Jackson, Anthony Russell, Tobozo, Neven Boyanov, Jarosław
+    Mazurkiewicz"; wired to the same `SSD1306_SCL`/`SSD1306_SDA` pins as
+    webboggles' own AttinyArcade board) - a heavily extended fork of the
+    same falling-block-puzzle base as this project's already-shipped
+    "Falling Blocks" (itself also Andy-Jackson-lineage), adding a ghost
+    piece, a "challenge mode", real music, and an EEPROM high score on
+    top. A genre-duplicate of "Falling Blocks" but a meaningfully
+    distinct, substantially-enhanced codebase - same "verify via real
+    diff before dismissing on genre alone" treatment as `attiny-snake`
+    above. Its own `font8x8AJ.h` turned out, once actually opened during
+    porting (not just assumed from the shared filename), to be a
+    genuinely different, cleaner 66-glyph table than the Bat Bonanza/
+    Stacker/Breakout family's own "hacked" 51-glyph one - a correction to
+    this entry's own earlier, filename-only guess at staging time.
+    **Ported** as `src/games/gameBlocksGold.c` (menu title "BLOCKS GOLD" -
+    see that file's own header for the full writeup, including the
+    trademark-avoidance rename and a real title-theme timing bug found
+    via direct user report after shipping).
+  - `attiny85_microgame_meteor_storm` (Albert Gonzalez, GitHub handle
+    `theisolinearchip` - confirmed via the repo's own git commit author,
+    not guessed from the handle alone; Unlicense/public domain) - a
+    single-button Flappy-Bird-style avoider (hold to rise, release to
+    fall, dodge square "meteors"). The outlier of the batch: a plain
+    AVR-GCC/Makefile project (not an Arduino `.ino` sketch, the build
+    toolchain every other game in this whole project uses) with its own
+    custom, non-`ssd1306xled` minimal SSD1306 driver, and only one
+    physical button - needed the most adaptation of the 4 to port (a
+    control-scheme remap similar in shape to this project's own already-
+    solved UFO hold-to-fly remap; the toolchain difference turned out not
+    to matter for the port itself, since the game logic is plain portable
+    C either way - only *building* upstream needed AVR-GCC specifically).
+    **Ported** as `src/games/gameMeteorStorm.c` (menu title "METEOR
+    STORM") - see Status below for the full writeup, including a real
+    rendering bug found via live user play well after initial shipping.
+- `FlappyBird` (Alex Wulff, www.AlexWulff.com - the sole attribution
+  anywhere in the source; no license statement anywhere in the game's own
+  code) - placed directly into the repo by the user (not staged/downloaded
+  by this session), with a `source.txt` pointing at the original
+  Instructables writeup
+  (instructables.com/Flappy-Bird-on-ATtiny85-and-OLED-Display-SSD1306) -
+  the `.ino`'s own header comment already names the real author directly,
+  so no further identification work was needed beyond confirming no
+  license is stated anywhere. A two-button (not hold-to-fly) Flappy Bird
+  clone: step the bird up/down by exactly one row per press, dodging a
+  stream of wall gaps that scroll in from the right at a steadily
+  accelerating rate. The simplest rendering model found in this whole
+  project - every draw call upstream is one full, page-and-column-aligned
+  8x8 grid cell (no sub-pixel/sub-page positioning anywhere at all, unlike
+  Meteor Storm's own sub-page sprite math). **Ported** as
+  `src/games/gameFlappyBird.c` (menu title "FLAPPY BIRD") - see Status
+  below for the full writeup, including a real "grace period" design
+  quirk found and removed via direct user testing.
+
+## A fifth beyond-scope discovery pass — a "very very deep scan" across Instructables/Reddit/code-hosting/non-English sites
+
+Triggered by a direct, explicit request to search far more broadly than
+any prior pass ("do a very very deep scan now for games, also in
+structable sites in multiple languages on reddit etc") - dispatched 3
+parallel background research agents (not staged/coded by this session
+directly, pure web research): one across English-language Instructables/
+Hackaday/Reddit/Hackster.io/AVR-Freaks/YouTube/GitHub, one across 8 non-
+English languages (Japanese, Chinese, Korean, French, German, Spanish/
+Portuguese, Russian, Italian - each searched with real native-language
+query phrasing, not just translated English keywords), and one across
+GitHub/GitLab/Codeberg/SourceHut code search plus the fork networks and
+full repo lists of every already-known author in this project. Combined,
+roughly 190 distinct search queries/repo inspections across all three.
+
+**Non-English result: nothing new anywhere.** Every one of the 8
+languages was exhausted with 5-12 queries each - every non-English post
+found (Japanese build-log blogs, a Chinese OSHWHub hardware clone, a
+Russian "custom console" article, an Italian forum thread that never
+progressed past a planning discussion, etc) turned out to be a build log,
+tutorial, or hardware-clone description of an *already-known* game from
+this project's own catalog, not an original non-English game. Korean
+turned up almost no content on this topic at all. The whole ATtiny85+
+SSD1306 "TinyJoypad-shaped" game ecosystem appears to live entirely on
+English-language GitHub/Instructables/Hackaday, at least as far as this
+pass could find.
+
+**English + code-hosting results: several genuine new finds**, cross-
+checked directly against real source (not just search-snippet guessing)
+before staging anything, and further narrowed by direct user follow-up
+instructions after the initial report:
+
+- **ATtiny45 Tetris** (tdorssers) and **RunTiny** (ridoluc) were both
+  found independently and initially looked like strong candidates, but
+  **ruled out at direct user request on hardware grounds** - ATtiny45
+  Tetris targets a real ATtiny45 (a smaller-flash sibling in the same
+  AVR family, not an ATtiny85 despite pin-compatibility), and RunTiny
+  targets an even smaller ATtiny10 in hand-written AVR assembly (would
+  need reimplementing the described mechanic from scratch, not
+  translating existing source) - this project's own working definition
+  has always been genuine ATtiny85 hardware, and the user drew that line
+  explicitly here rather than accepting "same family, close enough."
+- **ATtiny Tetromino** (Franco Trimboli, GitHub `sunpazed`, GPLv3,
+  `github.com/sunpazed/attiny-tetromino`) - directly fetched and read
+  both this repo's real source (`code/attiny_tetromino/attiny_tetromino.ino`,
+  888 lines) and its own credited upstream base,
+  `jfoucher/attiny-tetris` (Jonathan Foucher, no license stated, 610
+  lines, "probably the smallest tetris game in the world"), per a direct
+  user instruction to check whether either "extends an existing port
+  already (like Falling Blocks or Blocks Gold)" and whether they're
+  genuinely new code with a different screen/layout before staging
+  anything. Confirmed on both counts: the code is a completely separate
+  lineage from Andy Jackson's own TinyTetris/`font8x8AJ.h` family already
+  shipped twice (Falling Blocks, Blocks Gold) - built on the `Tiny4kOLED`
+  Arduino library's own page/cursor API instead, with its own from-
+  scratch board representation and font, zero shared functions or data
+  tables with the Andy-Jackson lineage. It also genuinely targets a
+  **128x32 display, not 128x64** (`SCREEN_WIDTH`/`SCREEN_HEIGHT` resolve
+  to a 4-page/32-row-tall board, confirmed via the real `oled.begin()`/
+  `page_pixels[SCREEN_HEIGHT][4]` calls) - a real, different screen
+  layout, not just a re-skin, meaning a noticeably shorter/more
+  compressed board than every Tetris-family game already in this
+  cartridge. A `diff` against jfoucher's own base confirmed sunpazed's
+  fork is a substantial rewrite (7-bag randomiser, NES-matched level
+  timing, a lines/levels counter, a restart gesture, and a faster I2C
+  library), not a trivial re-license - matching this project's own
+  established "stage the superset, not both redundant versions" practice
+  (e.g. Jump Slime's `jump6` over `jump5`), **only sunpazed's enhanced
+  fork was cloned into `more games/attiny-tetromino/`**, not jfoucher's
+  own smaller base.
+- **ATTiny85_Pong** (Winston-Lu, MIT, `github.com/Winston-Lu/ATTiny85_Pong`)
+  - an enhanced Pong (a cooldown-gated deflecting "shoot" projectile, a
+  6x-speed "spike" burst ability, adjustable AI difficulty) using the
+  exact same single-analog-pin voltage-ladder input shape as TinyJoypad's
+  own scheme - distinct author/codebase from the already-shipped Bat
+  Bonanza. Cloned into `more games/ATTiny85_Pong/`.
+- **TinyBullsAndCows** (datacute, MIT,
+  `github.com/datacute/TinyBullsAndCows`) - a Bulls-and-Cows/Mastermind-
+  style number-guessing game, a genuinely new genre for this cartridge (no
+  puzzle-logic game of this specific shape exists yet). Cloned into
+  `more games/TinyBullsAndCows/`.
+- **attiny85-flappy-bird** (Lampropoulosss, no license stated,
+  `github.com/Lampropoulosss/attiny85-flappy-bird`) - a plain AVR-GCC/
+  Makefile project (not an Arduino sketch, the same toolchain shape
+  already proven portable for Meteor Storm) implementing a genuinely
+  different Flappy Bird mechanic than the already-shipped Alex Wulff
+  port: a true continuous-position pipe-gap flyer (closer to the
+  original mobile game's own feel) rather than the already-shipped
+  game's discrete one-row-per-press stepping avoider. Not ruled out by
+  the user's own "rule out the closer look games" instruction (that
+  covered a different, specific set - see below) and genuinely different
+  gameplay from what's already shipped, but flagged here rather than
+  silently assumed distinct: worth a final side-by-side mechanic check
+  against the shipped Flappy Bird before actually porting it, the same
+  "verify via real reading, not genre-name alone" discipline this
+  project applies everywhere else. Cloned into
+  `more games/attiny85-flappy-bird/`.
+
+**A follow-up feasibility audit** ("do a quick audit on the new games to
+see feasability if really can be ported"), done by directly reading each
+staged candidate's own real source rather than trusting the research
+agents' summaries, found that 3 of the original 7 don't actually hold up
+- **removed from `more games/` entirely** at direct user request rather
+than staying around as dead weight:
+- **Lode Runner** - the earlier summary's "monochrome I2C SSD1306, same
+  input shape as TinyJoypad" description turned out to be wrong once the
+  real init call was read: `lode_runner.ino` actually calls
+  `ssd1331_96x64_spi_init(...)` (a **color SPI OLED**), with the
+  monochrome `ssd1306_128x64_i2c_init()` line sitting right there but
+  commented out, and gameplay-relevant color baked in throughout
+  (`RGB_COLOR8(...)` distinguishing ladders/ropes/gold/enemies - not
+  decorative). It also depends on the library's own templated
+  `NanoEngine<TILE_16x16_RGB8>` C++ framework (`Ninja : public
+  NanoFixedSprite<GraphicsEngine, engine>`), never proven in this
+  project's dialect. Wrong hardware shape, not just extra effort - the
+  whole `ssd1306` repo clone was removed (its own `examples/games/
+  arkanoid8`, the other thing in it that had been checked, was already
+  ruled out as color/SPI too).
+- **crobagotchi** - a genuine design-fit problem, not a technical one.
+  Reading `crobgame.cpp`/the main `.ino` directly confirmed the entire
+  point of the game is stats decaying over real elapsed hours/days while
+  the device sits powered on a coin cell between check-ins
+  (`sleep_cpu()`/watchdog-driven real-time decay tied to an
+  `interaction_seconds_counter`) - there is no equivalent of "keeps
+  quietly aging in the background while you're not playing it" in a
+  cartridge selected from a menu for one sitting. Porting it as designed
+  isn't possible; a "fixed" session-only version would just be a
+  different, much shallower game wearing this one's name.
+- **Ball-Game-ATtiny85** - confirmed the repo has no single finished
+  game anywhere in it. The one file that actually targets an OLED
+  (`sketch27.ino`) has no score tracking or game-over state at all; the
+  *only* version with real scoring (`firstversion.ino`, byte-for-byte
+  duplicated as `sketch27_ino.ino`) targets a 16x2 **character LCD**
+  (`LiquidCrystal lcd(...)`), not an OLED, and was never merged back into
+  the OLED branch. Porting this faithfully would mean designing the
+  missing scoring/game-over pieces myself rather than translating an
+  already-complete design - against how every other port in this project
+  has worked.
+
+The remaining 4 candidates (ATtiny Tetromino, ATTiny85_Pong,
+TinyBullsAndCows, attiny85-flappy-bird) were all confirmed via the same
+direct-source-reading pass to be genuinely portable at a normal effort
+level - see each one's own bullet above for the specific adaptation work
+each will need.
+
+**Ruled out entirely, per direct, explicit user instruction ("rule ou
+the closer look games") rather than further independent investigation**
+- these were flagged in the initial research report as needing a closer
+look before deciding, and the user chose to exclude all of them outright
+rather than spend more effort resolving the ambiguity:
+- **BRICKZZZ** (R-onit) - an independent Breakout/Arkanoid-genre entry,
+  distinct codebase from both already-shipped Breakout and Tiny
+  Arkanoid, but a 3rd entry in an already-well-covered genre.
+- **attiny85-google-dino** (artemvang) - another Chrome-dino clone,
+  different author/codebase from the already-shipped Dino Game, but
+  again a genre already covered.
+- **technoblogy/secret-maze** (David Johnson-Davies) - a real ATtiny85
+  maze game, but technoblogy.com was unreachable during research to
+  confirm its exact display/button specifics.
+- An unidentified "Snake" bundled inside lonesoulsurfer's "Tiny Arcade
+  Game" Instructables kit (CC BY-NC) - possible duplicate of the
+  already-shipped Oroboros, never isolated/confirmed either way.
+
+Also ruled out during research, for completeness (wrong hardware/chip
+family, zero-player automata, PCB-only with no firmware, or confirmed
+re-bundles of already-known games rather than new content) - not staged,
+not revisited: `U-Byte85` (drives a serial terminal, not an OLED at all),
+`egillmilan/snake_oled` (ATmega32U4 Pro Micro, not ATtiny85),
+`obono/ATtiny85LED2048` (a WS2812B LED matrix, not SSD1306),
+`terezaza/tictactoe-arduino` (a discrete analog joystick module, no
+ATtiny85 target stated), `callysophie`'s temperature-puzzle game
+(requires an external DS18B20 sensor as core gameplay input),
+`wagiminator/CH32V003-GameConsole` (RISC-V, not AVR),
+`theisolinearchip/gameoflife_attiny85`/`obono/ATtiny85FallingSand`/
+`ssomers/ATtiny85_OLED_Bouncing_Ball` (zero-player automata/demos, no
+player input at all), `PrabhuEmbeddedWorks`'s controller PCB (schematics
+only, no firmware), a 3D-wireframe tech demo (not a game),
+`upiir/attiny85_dice_game` (technically interactive but extremely
+trivial - roll a die, nothing else), and several confirmed re-bundles of
+already-known games under different repo names (`afonsus1997/Pocket-
+Tetris`, `jjshortcut/PockeTetris`, a badge project built on the latter,
+`Jaycar-Electronics/Tiny85-Game`'s own Four-in-a-Row being byte-for-byte
+the same code as the already-shipped one, `pakozm/TinyGames`'s own
+"Parachute" folder turning out to be an unfinished stub with empty
+`setup()`/`loop()` once its real source was read directly rather than
+guessed from search snippets, and several hardware/launcher projects -
+`dschnur/Business-Card-4.0`, `tscha70/MegaGamesCompilation`,
+`orzel/sygeco`, `SeanP2001/attiny-handheld-games-console` - that only
+bundle or reference games already in this project's own catalog).
+
+All 4 candidates that survived the follow-up feasibility audit (3
+removed - see above) have now shipped: TinyBullsAndCows, ATtiny
+Tetromino, ATTiny85_Pong (shipped as "Laser Pong"), and
+attiny85-flappy-bird (shipped as "Pipe Bird" - confirmed via direct
+source reading, not genre-name alone, to be a genuinely different
+continuous-position pipe-gap mechanic vs. the already-shipped Flappy
+Bird's own discrete row-stepping one) - see each one's own writeup below
+for the full porting story. The "very very deep scan" discovery batch is
+now fully closed out.
+
+Most of the Daniel-C `tinyJoypadShim`-lineage titles and all three Obono
+`TinyJoypadWorks` games in this folder are shipped now (22 games total -
+see Status below for the full list and per-game writeups); `TinyDungeon`
+remains scoped but not started (see its own note in Status - a full C++
+raycaster class, deliberately deferred). Before porting anything new from
+this folder, triage it the same way CLAUDE.md's own porting plan
+describes (discrete-object vs procedural-pixel vs irrelevant-bit-banged-
+timing) and check which driver lineage it's built on (tinyJoypadShim vs
+obonoCoreShim, or a third one if it doesn't match either).
+
+## A sixth beyond-scope discovery pass — ESP8266/ESP8285 OLED handheld games from authors other than Daniel C
+
+Triggered by a direct user request, once Nohzdyve/Gilbert in the
+Downland/Ardumania (all three from Daniel C's own ESP8285/ESP8266 "MEGA
+TinyJoypad" compilation - see that section above) had all shipped: since
+that compilation proved the whole ESP8266/ESP8285 hardware class ports
+just as cleanly as ATtiny85 (the display driver still streams one real
+SSD1306 page-byte at a time regardless of which chip is driving it - see
+each of those 3 games' own writeup for the details), the user asked
+whether *other*, previously-uncatalogued ESP8266/ESP8285 OLED handheld
+games exist from different authors. Dispatched 2 parallel background
+research agents (pure web research, nothing staged/coded directly by
+either) - one covering direct GitHub/code-hosting search, one covering
+community/blog/non-English/Wokwi sources - cross-checking every
+candidate against this project's own full 53-game catalog before
+reporting it as new, not just by genre name.
+
+**Both agents independently converged on the same author and repo
+family** (a good, mutually-reinforcing signal, not two shots at the same
+target by chance) - **tonym128**, whose game framework traces back to
+the BSides Cape Town 2016 CTF badge (`AndrewMohawk/BSidesBadge2016`).
+Two related repos exist: **`tonym128/ESP8266GameOn`** (the older,
+per-branch version - `game-asteroid`, `game-drive`, `game-downdrive`,
+`game-flappy`, `game-fly`, `game-maze`, `game-maze-arduboy`, plus
+procedural-effect demos) and **`tonym128/BFlight`** (a newer,
+consolidated bundle - `bsideFly` a free-flight/combat game, `driveGame` a
+driving/dodging game, `mazeRunner`+`mazeGenerator` a real procedurally-
+generated maze-navigation game, plus the same effect demos) - likely the
+same "stage the superset, not the earlier redundant version" situation
+as this project's own Jump Slime `jump6`-over-`jump5` precedent, though
+not yet confirmed by an actual diff the way that precedent was. Real
+ESP8266 (Wemos D1 Mini / ESP8266-12E) + SSD1306 128x64 I2C hardware, a
+6-discrete-button scheme (`P1_Left/Top/Right/Bottom` + 2 more, read via
+analog "touch" pins or a shift register) directly analogous in shape to
+TinyJoypad's own button layout, GPLv3 (confirmed via each repo's own real
+`LICENSE` file). The `plasma`/`rotoZoomer`/`voxel` effect demos in both
+repos are out of scope per this project's own GPU model (procedural
+per-pixel, not discrete objects) - same call as every prior procedural-
+render exclusion here (TinyDungeon's own disabled raycast branch aside).
+
+The two research agents disagreed on one point, later resolved directly
+by reading the real source rather than diffing repos: `game-asteroid`
+(free-rotate/thrust/shoot, no genre-duplicate anywhere in this project's
+own catalog - Space Attack/Tiny Invaders are fixed-lane, Tiny Missile is
+Missile-Command-style) turned out to be specifically an
+`ESP8266GameOn`-only title, never carried forward into `BFlight` at all
+- confirmed once `ESP8266GameOn`'s own README was actually read ("You
+can see the Asteroids demo on the master branch"), rather than needing a
+diff against `BFlight`'s own file list. Shipped as "Asteroid" - see its
+own writeup further below. `driveGame` and `mazeRunner`/`mazeGenerator`
+were confirmed by both agents as genuinely new genres with no existing
+duplicate in this project's own catalog (Tiny Bike is a structurally
+different side-scrolling motocross game, not a top-down driving/dodging
+one) - the two strongest, least-ambiguous candidates in this whole batch.
+
+A secondary find, **`hoangminh5210119/Esp8266OledGame`** (a Vietnamese-
+language repo, reached via a generic search rather than deliberate
+Vietnamese-language querying - the non-English search itself otherwise
+came up empty across Japanese/Chinese/Korean/French/German/Italian/
+Russian, matching this project's own prior ATtiny85-search experience
+almost exactly) - real ESP8266 + a 1.3" OLED (likely SH1106, 128x64) + 3
+discrete buttons, no license stated anywhere. Bundles 4 games
+(`CarRaceGame`/`FlappyBirdGame`/`PongGame`/`TRexGame`) - 3 of the 4 are
+almost certainly genre-duplicates of already-shipped titles (Flappy
+Bird/Pipe Bird, Bat Bonanza/Laser Pong, Dino Game) by genre alone, not
+yet individually diffed to confirm; only `CarRaceGame` (a distinct
+codebase from a different author than `BFlight`'s own `driveGame`) looks
+like it might be worth a look, and only as a secondary option if a
+second driving-game candidate is ever wanted alongside `driveGame`
+itself.
+
+A weaker, explicitly unconfirmed find: a "Helicopter" cave-dodge game
+from **`innif/Arduino-Game-System`** (ESP8266 + SSD1306, 4 discrete
+buttons, GPLv3 per its own `LICENSE.md`) - mechanically close enough to
+the already-shipped HollowSeeker (Obono's own cave/tunnel dodge) and
+UFO's own hold-to-fly gap-weaving that it's likely a genre triplicate,
+but wasn't code-diffed against either the way this project's own
+"verify via real diff before dismissing" precedent would ideally want
+before ruling it out for real - staged anyway so that diff can happen
+directly against the real source rather than from memory/genre-name
+alone.
+
+**Ruled out** (checked directly by at least one agent, not just by
+title, before being dismissed): several "MEGAcompilation" repos
+(`ESPboy-edu/ESPboy_MEGAcompilation160mhz`, `vannt97/
+MEGAcompilation160mhz`, `tscha70/MegaGamesCompilation` + its
+`PicoAdafruit` sibling) confirmed as straight re-bundles/retargets of
+Daniel C's own already-fully-ported MEGA TinyJoypad compilation, not new
+content; `corax89/esp8266_game_engine` ("ESP-LGE", the base for the
+whole ESPboy ecosystem and its ~34-game library) confirmed to drive a
+color ILI9341/ST7735 **TFT** display via SPI, not a monochrome SSD1306/
+SH1106 - wrong hardware/rendering shape entirely regardless of how many
+novel-sounding titles it has; `cheungbx/game8266-micropython` and its
+successor `gameESP-micropython` (the same Billy Cheung already credited
+in this project for Wren/Frogger/Bat Bonanza/Stacker/UFO) - real
+matching hardware but MicroPython, not C/C++ (breaks this project's
+whole source-translation methodology), and every game in it is a genre
+duplicate anyway; an AI-generated itch.io bundle
+(`koja-games.itch.io/esp8266-game-console`) and a handful of plain
+tutorial-grade Snake/Breakout single-game repos (`Empitrix/oled-snake`,
+`brychanthomas/ESP8266-OLED-breakout`) - trivial genre duplicates with no
+distinguishing mechanic; several Hackaday.io projects (`GamerGorl` -
+Simon, already excluded by this project's own long-standing tinyjoypad.com-
+adjacent precedent; Daniel Johnson's "ESP8266 Game" #8756 - only an
+unfinished, author-described-as-"cluttered" Pong prototype ever
+documented) that didn't clear the "real, finished, distinct game" bar.
+
+Staged into `more games/` (git-cloned, `--depth 1`, matching every other
+GitHub-hosted source in this folder): `Arduino-Game-System/` (Helicopter),
+`Esp8266OledGame/` (CarRaceGame, plus 3 likely-duplicate games in the
+same repo), `ESP8266GameOn/`, and `BFlight/`. **Update: every real game
+staged from this entire discovery pass has now shipped** - `BFlight`
+(Road Rush/DFlight/MRunnr), `ESP8266GameOn`'s own Asteroid,
+`Arduino-Game-System`'s own Helicopter, and `Esp8266OledGame`'s own
+CarRaceGame - see each one's own writeup further below (Helicopter's own
+real code-diff against HollowSeeker/UFO, confirming it's genuinely
+distinct from both rather than a genre triplicate, is documented in its
+own writeup; CarRaceGame's own read-through confirmed it's a top-down
+fixed-position lane-dodging traffic dodger, structurally distinct from
+Road Rush's own pseudo-3D perspective racer despite the shared "driving
+game" genre). This whole sixth beyond-scope discovery pass is now fully
+closed out - `Esp8266OledGame`'s other 3 games
+(FlappyBirdGame/PongGame/TRexGame) were confirmed via a direct read to
+be genuine genre-duplicates of already-shipped titles and were not
+ported, matching this project's own established discipline for
+"verify via real reading, not genre-name alone" before either porting
+or dismissing a candidate.
+
+## Target platform facts (Vircon32) — verified against vircon32.com
+
+- 15 MHz CPU, 32-bit, floating point support, 16 MB RAM
+- Screen: 640x360, true color
+- **GPU is a texture-region blitter, not a mutable CPU-writable framebuffer.**
+  The standard C API (`video.h`) only exposes: `select_texture` /
+  `select_region` / `define_region*` to pick a rectangle out of a preloaded
+  texture, plus a `draw_region*` family (`draw_region`, `draw_region_at`,
+  `draw_region_zoomed[_at]`, `draw_region_rotated[_at]`,
+  `draw_region_rotozoomed[_at]`) to blit it to screen with optional
+  scale/rotation. There is no `set_pixel()` or documented "upload a raw
+  buffer to VRAM every frame" call. Textures are cartridge resources.
+- Hardware blending modes: alpha (default), add, subtract
+- Audio: 16-channel CD-quality stereo (`audio.h`)
+- Input: up to 4 gamepads, 6 buttons + Start (`input.h`)
+- ROM is a single file; has a C compiler (asm available for advanced/optimized
+  work — see the [[v32opt]] project for prior Vircon32-assembly experience)
+- 1 MB memory cards for save data
+
+**Implication:** games that draw discrete objects (sprites, digits, shapes,
+tile-based playfields) map cleanly onto region blits and should run
+comfortably within the CPU/GPU budget. Games that rely on per-pixel
+procedural rendering (plasma effects, simple raycasters, per-pixel noise)
+do NOT have a direct home in this model — one `draw_region()` call per pixel
+(128x64 = 8192 calls/frame) is not viable. Before ruling those out entirely,
+check whether a lower-level runtime texture-write mechanism exists outside
+the documented `video.h` (e.g. in the assembly-level GPU commands, Part 4 of
+the official spec at vircon32.com/specs.html) — otherwise treat those games
+as out of scope or requiring a full rewrite rather than a port.
+
+## Source platform facts (TinyJoypad)
+
+- Games target ATtiny85: 8 KB flash, 512 B RAM, single analog pin decoded as
+  a ~5-button voltage-divider ladder, piezo buzzer for sound
+- Display: SSD1306 128x64 monochrome OLED over I2C
+- Most games are built on the `ssd1306xled` display driver plus a small
+  shared utility header (commonly `TinyDriver.h` or `tinyJoypadUtils.h`) that
+  handles init and button reads — but this isn't perfectly uniform; several
+  community forks patch the driver per author/device, so expect some
+  per-game cleanup rather than one drop-in shim covering every game verbatim
+- Each game is a single `.ino`, normally owning `setup()`/`loop()` and
+  assuming it's the only program on the chip — no namespacing, no menu
+  concept, globals and asset arrays given generic names
+
+## Porting plan
+
+1. **Triage the game list first**, before porting anything. Sort into:
+   - draws discrete objects per frame → portable, likely straightforward
+   - draws pixels procedurally / full-buffer effects → likely out of scope
+     (see GPU note above)
+   - relies on raw bit-banged I2C or cycle-exact AVR asm for display timing
+     → irrelevant on Vircon32 (the GPU handles display output, no bit-banging
+     needed), treat as "discard or rewrite from scratch," not "port"
+2. **Build one shared compatibility shim first**, proven against 2–3 simple
+   games before investing further. It should map the common
+   `ssd1306xled`/`TinyDriver` calls (draw pixel/line/rect/bitmap/text, read
+   button) onto Vircon32 equivalents:
+   - drawing primitives → preloaded texture regions blitted via
+     `draw_region_at()` at the right position
+   - button ladder reads → real Vircon32 gamepad button reads
+   - buzzer tones → `audio.h` channel playback
+3. **Per game, once the shim is validated:**
+   - rename `setup()`/`loop()` to unique entry points
+     (e.g. `game_invaders_init()`, `game_invaders_update()`)
+   - prefix/namespace all globals and asset tables to avoid symbol collisions
+     when multiple games are linked into one cartridge
+   - make sure the game resets cleanly when selected from the menu (Vircon32
+     doesn't reboot between menu choices the way separate AVR firmware
+     flashes effectively did — GPU/audio state left over from the previous
+     game needs to be cleared)
+4. **Build the menu/game-select screen last**, after the shim and a couple of
+   games are proven — it's the least risky part and validating the core shim
+   first avoids rework.
+
+## Open questions — resolved
+
+- **No runtime texture-write path exists beyond `video.h`** (confirmed by
+  reading the real header) - but it turned out not to matter. Every
+  TinyJoypad driver lineage found (Lorandil/phoenixbozo's
+  `tinyJoypadUtils`/`FastTinyDriver`, Obono's `TinyJoypadWorks` core)
+  streams the display **one SSD1306 hardware "page" byte at a time**, never
+  keeps a full framebuffer (ATtiny85 only has 512B RAM), and never reads
+  pixels back. A byte is 8 vertical pixels of one column, so there are only
+  256 possible byte values - `tools/gen_column_atlas.py` pre-bakes a
+  256-tile texture atlas at build time (one tile per byte value, already
+  scaled to final on-screen size), and each `SendPixels(byte)`-equivalent
+  call becomes one `select_region(byte); draw_region_at(x, y)` GPU blit
+  (skipped entirely when `byte == 0`, since the frame's already
+  `clear_screen()`-ed black). Even TinyDungeon's raycaster funnels through
+  this same per-byte page stream internally - it's column-buffered, not
+  truly per-pixel-procedural. See `src/portVircon32.c`'s `md_drawColumn()`.
+- **Presentation**: 128x64 -> 5x scale -> exactly 640x320 (128*5 = 640, no
+  remainder), centered in the 640x360 screen with a 20px black bar top and
+  bottom.
+- **Asset pipeline**: the column atlas above is the *only* image asset the
+  whole cartridge needs - `tools/gen_column_atlas.py` generates it
+  deterministically (no PROGMEM-bitmap-to-PNG conversion required at all,
+  since sprite/font/level data ported from each game stays as plain
+  numeric arrays in the compiled C, not texture assets).
+
+## A real bug worth knowing about: word vs. byte truncation
+
+Vircon32 ints are full 32-bit words with **no implicit truncation** the way
+AVR's `uint8_t` gave the original code. Upstream draw code that relies on a
+shift-then-OR "overflowing" out the top of a byte (common in sprite/font
+compositing and in NumberPlace's sub-page digit rendering, since its 7px-tall
+board rows don't align to 8px hardware pages) leaves stray high bits set
+once every `uint8_t` becomes a plain `int` via `avrCompat.h`'s aliasing.
+Symptom: corrupted texture-region lookups (garbled grid lines/digits) since
+the stray bits push the "byte" value past 255. **Fixed once, centrally**, in
+`md_drawColumn()` (`src/portVircon32.c`) by masking `value &= 0xFF` right
+before it's used to select a texture region - every column value from every
+game/shim funnels through that one function, so this single fix covers the
+whole cartridge rather than needing per-call-site masking.
+
+## Two more real bugs worth knowing about: `rand()` range and shift wraparound
+
+**`rand()` range mismatch.** AVR/Arduino's `rand()` returns a non-negative
+~15-bit value (0..32767). Vircon32's `rand()` (`misc.h`) instead returns the
+raw 32-bit RNG register directly - any sign, any magnitude. Code ported
+verbatim from AVR that does `rand() % n` (or worse, arithmetic assuming a
+~16-bit range, like HollowSeeker's original hollow-distance formula
+`((rand() + 32768) * score >> 22) + 2`) silently breaks: a negative raw value
+modulo n can itself be negative in C, and combined with Vircon32's *logical*
+`>>` (no sign extension), shifting a negative value right produces a huge
+positive result instead of a small one. Symptom (HollowSeeker): the cave's
+"make a gap" branch almost never fired, so the tunnel filled in solid over
+time. **Fixed once, centrally**, with a shared `arand(n)` helper in
+`avrCompat.h` (clamps to non-negative, then mods) - used by every ported
+game's own random helper (NumberPlace's `npRandom`, t2048's `t2048Random`,
+Tiny Invaders' monster-shoot RNG, HollowSeeker's cave generation) instead of
+raw `rand() % n`.
+
+**Shift-count wraparound.** Confirmed empirically: `(0xFF << 32) & 0xFF`
+evaluates to `255` on Vircon32, not `0` - the shift instruction wraps the
+shift amount modulo 32 (like x86 hardware), whereas AVR-GCC's codegen for a
+*variable*-count shift (a bit-by-bit loop, since AVR has no barrel shifter)
+correctly saturates to 0 once the count exceeds the value's width, no
+wraparound possible. HollowSeeker's cave-wall edge-highlight patterns
+(`edgeTopPtn`/`edgeBottomPtn` in `hsDrawGame()`, `src/games/gameHollowSeeker.c`)
+compute a shift amount from wall thickness, which routinely exceeds 8 (walls
+are commonly 30-40+ px thick) - upstream this always correctly saturated to
+0 ("far from the tunnel edge, no highlight needed"), but on Vircon32 any
+shift amount landing in the `[32,39]` window (mod 32 = 0..7) instead produced
+a solid or near-solid byte, overpowering the intended sparse crosshatch
+texture - the reported "white garbage blocks", worst when both cave walls
+were thick/close together since both computations were likely to hit the
+wraparound simultaneously. Fixed by explicitly clamping both shift amounts
+to the true 8-bit-meaningful range (0-7) rather than trusting the shift
+instruction outside it - this is the same class of bug as the byte-
+truncation one above (an AVR-implicit-behavior the port can't assume holds),
+just via a different mechanism (shift-count wraparound vs. assignment
+truncation), so any *other* upstream code relying on "shift past the
+register width gives zero" would need the same explicit-clamp treatment -
+none currently does (checked every other `<<`/`>>` site in the codebase;
+all of them shift by a value already bounded well under 8 by construction).
+
+## A third real bug, same family: signed-sentinel comparison
+
+Tiny Invaders' `MonsterGrid` is `int8_t` upstream, and its "clear the
+battlefield" step does `memset(space->MonsterGrid, 0xff, sizeof(...))` -
+since raw memset fills bytes, and `int8_t` reads a `0xFF` byte back as
+**-1**, this matches the sentinel every monster-grid read in the file
+checks for (`< 0`, `!= -1`) to mean "no monster here". The ported
+`tinvClearBattleground()` (`src/games/gameTinyInvaders.c`) translated this
+as a per-element loop assigning the literal `tinvSpace->MonsterGrid[y][x]
+= 0xFF` - but `MonsterGrid` is a plain 32-bit `int` via `avrCompat.h`, so
+that literal stores `255`, not `-1`. Every sentinel check in the file
+(`spriteType < 0`, `!= -1`) then silently failed to match, so
+`tinvMurgeSplitUpDown()` fell through and indexed `tinvMonsters[]` with
+`spriteType=255` - wildly out of bounds - reading garbage sprite data.
+Symptom: the "LEVEL N" flash screen (`tinvBeginLevelStart()` renders one
+frame with a freshly-cleared battleground, *before*
+`tinvVarResetNewLevel()` populates real monster data a few frames later)
+showed a corrupted, static-like repeating pattern across the monster-grid
+rows instead of a blank background. **Fixed** by using the literal `-1`
+instead of `0xFF`, matching every other sentinel assignment/check already
+in the file. Same root cause as the two bugs above (an AVR narrow-signed-
+type behavior the port's `int`-widening can't preserve implicitly) - a
+third distinct mechanism (signed-sentinel comparison, vs. truncation or
+shift wraparound), so any future port should treat *every* `0xFF`/`0x80`-
+style "magic byte" constant as suspect and check whether the original type
+was signed before assuming the literal ports over unchanged.
+
+## A fourth bug, same family, found much later via live user play: logical vs. arithmetic right-shift
+
+Found in HollowSeeker, long after it shipped, from a user report: "when
+the little guy moves right he is sometimes very briefly drawn on the
+bottom of the screen 'over' the cave." `hsUpdatePlayer()`'s player-Y
+calculation includes `hsDivByColumnW(hsPlayerJump * hsPlayerMove)`, where
+`hsDivByColumnW(val)` was simply `(val) >> 3` (a divide-by-8 shortcut) and
+`hsPlayerJump = pPlayerColumn->bottom - pNextColumn->bottom` is genuinely
+**negative** whenever the player moves into a column where the cave floor
+drops lower on screen. Upstream (AVR-GCC) sign-extends a negative `int`'s
+right shift, so `-5 >> 3` correctly gives `-1` there - but
+**`VIRCON32_C_DIALECT.md` explicitly documents `>>` as a *logical* (zero-
+fill) shift, not arithmetic**, so the same operation on Vircon32 turned a
+small negative number into a huge *positive* one instead. That garbage
+value fed straight into `playerY`, and the very next line's own clamp
+(`if (playerY > HEIGHT-HS_PLAYER_H) playerY = HEIGHT-HS_PLAYER_H;`) -
+there to keep the player from ever being drawn below the visible cave -
+instead caught the garbage and pinned the sprite to the absolute bottom
+of the screen for that one frame, exactly matching the reported symptom.
+Same root cause as the shift-wraparound bug above (an AVR-implicit shift
+behavior the port can't assume holds) via yet another distinct mechanism
+(sign handling on negative operands, vs. shift-*count* wraparound).
+**Fixed** by turning `hsDivByColumnW` from a macro into a real function
+that branches on `val >= 0` and, for negatives, computes
+`-((-val + 7) >> 3)` - mathematically equal to floor-division-by-8 (what
+AVR's arithmetic shift produced) while only ever shifting a non-negative
+operand, where logical and arithmetic shifts agree. Needed moving the
+function above every one of its call sites (`hsGetColumnOfPos()`'s own
+macro included) per Vircon32's no-forward-declarations rule. Verified
+with an extended Puppeteer soak test - held the right d-pad continuously
+across 40 sampled frames (a fresh screenshot every 150ms) through several
+floor-height transitions - confirming the player sprite stayed correctly
+seated on the cave floor throughout, never flashing to the bottom edge.
+**Generalizable takeaway**: any upstream `>>` on a value that can be
+negative (not just ones already found via a crash or a visibly garbled
+static pattern, per the earlier shift-wraparound bug) is suspect on
+Vircon32 - a subtly wrong single-frame visual glitch like this one is
+much easier to miss in testing than a hard crash or a persistent
+corruption, and can hide in already-shipped code for an entire session
+before a live player happens to trigger and report it.
+
+A related, smaller bug found alongside it: the very first playthrough of a
+session showed "LEVEL 0" instead of "LEVEL 1". Upstream's `NEWGAME:` label
+(reached via `goto` at cold boot *and* on every post-game-over restart)
+unconditionally sets `currentLevel = 1` before the intro cycle begins; the
+port split that label's reset logic between `gameTinyInvaders_init()`
+(cartridge launch) and `tinvStartNewGame()` (restart-after-game-over only),
+and only the latter got the correct `= 1` - `gameTinyInvaders_init()` was
+left at `= 0`. Fixed by matching upstream's value in both places.
+
+## A fourth bug: a shared "wait complete" dispatcher clobbering its own callee's new state
+
+Not an AVR-type-width issue this time - a genuine control-flow mistake from
+restructuring upstream's `goto`-chained state transitions into the port's
+explicit `tinvWaitFrames`/`tinvWaitAction` frame-counted wait
+(`tinvOnWaitComplete()`, `src/games/gameTinyInvaders.c`). Its
+`TINV_WAIT_AFTER_LEVEL_CLEARED` branch calls `tinvBeginLevelStart()`, which
+sets a *brand new* `tinvWaitAction = TINV_WAIT_AFTER_LEVEL_START` (plus a
+fresh 60-frame countdown) so gameplay can resume once the "LEVEL N" flash's
+own wait finishes - but `tinvOnWaitComplete()` had an unconditional
+`tinvWaitAction = TINV_WAIT_NONE;` *after* its if/else-if chain, which ran
+regardless of which branch fired, clobbering that fresh value back to NONE
+immediately. So every time the level-start countdown completed,
+`tinvOnWaitComplete()` ran again with `tinvWaitAction` already NONE -
+matching no branch - and the game never reached `tinvBeginPlaying()`.
+Symptom (reported by the user): clear a level, see the correct "LEVEL N"
+flash, then the game freezes permanently - no monsters, no ship response to
+input - because `TINV_STATE_LEVEL_START` has no per-frame dispatch branch
+of its own in `gameTinyInvaders_update()` (by design, since it's normally
+just a fixed wait), so once stuck there with `tinvWaitFrames` also stuck at
+0, nothing ever runs again. **Fixed** by moving the reset from the end of
+the function to the start (into a local `completedAction` snapshot used for
+the branching), so a branch's own callee can set a new wait action that
+actually persists. Diagnosed by reproducing the freeze with a temporarily-
+edited level layout (2 monsters instead of 24, reverted after) plus a
+temporary on-screen readout of `tinvWaitFrames`/`tinvWaitAction`/`tinvState`
+forced to redraw every frame during the stuck wait (normally nothing
+redraws during a plain wait, so the freeze itself made the bug invisible
+without forcing a redraw) - both removed again after the fix was confirmed.
+
+## A fifth bug: a highscore poll that can be permanently starved of its last update
+
+Also not an AVR-type-width issue - a genuine pre-existing quirk confirmed
+present in *upstream too* (checked `Tiny_Flip()`'s own `newHighScore |=
+updateHighScorePoints();` call), just one this port chose to fix rather
+than preserve. `tinvUpdateHighScore()` (checks `tinvScore > tinvHighScore`,
+updates if so) is called once per frame, early inside `tinvTinyFlip()` -
+*before* that same frame's own scoring happens, since scoring
+(`tinvAddScore()`, via `tinvMonsterAttackCheck()`/`tinvUFOAttackCheck()`)
+is triggered from `tinvMyShoot()` deep in the per-pixel render loop that
+runs later in the same call. This gives every score change a full extra
+frame to be reflected in `tinvHighScore` - invisible during normal play,
+since there's always another `tinvTinyFlip()` call moments later - *unless*
+the very last scoring kill of a life lands on the exact frame the ship's
+death is finalized: the frame after that stops calling `tinvTinyFlip()` at
+all for ~36 frames (see `tinvUpdatePlaying()`'s `tinvShipDead` handling), so
+the lagging poll never gets another chance to catch up before
+`tinvBeginGameOverDisplay()` reads `tinvHighScore` for the "NEW HISCORE!"
+screen. Symptom (reported by the user): a clearly-visible live score (e.g.
+60) but the "NEW HISCORE!" screen showing a stale, lower value (e.g. 30 -
+exactly the score from before that last kill). **Fixed** by syncing
+`tinvHighScore`/`tinvNewHighScore` immediately inside `tinvAddScore()`
+itself (the point score actually changes), rather than relying solely on
+the once-per-frame poll elsewhere - `tinvUpdateHighScore()` is left in
+place as a harmless no-op fallback. Confirmed both the bug and the fix with
+a temporary side-by-side on-screen readout of `tinvScore` next to
+`tinvHighScore` on the game-over screen itself (removed after).
+
+## A sixth bug, a different family entirely: the PlayNote wavetable's own hardware speed clamp flattening every note in Tiny Arkanoid's intro tune to one pitch
+
+Found via a direct user report comparing this build against its own
+sibling ports: Tiny Arkanoid's own well-known intro jingle (a real,
+recognizable classic-Arkanoid melody, see `arkStartNoteSeq`/
+`arkAdvanceNoteSeq` in `src/games/gameTinyArkanoid.c`) was completely
+unrecognizable here, while playing correctly on this project's own SDL3
+and Playdate sibling ports. Since `gameTinyArkanoid.c` itself is
+byte-identical across all three ports (confirmed directly - only the
+mechanical dialect differences, e.g. `int[N] name` vs `int name[N]`,
+differ at all), the bug had to be in this build's own platform-specific
+audio backend, not the shared game logic - not the same family as the
+five bugs above (all of which stem from an AVR-implicit-narrow-type
+behavior the Vircon32 port's own `int`-widening can't preserve
+automatically). This one is a genuine Vircon32-*hardware* constraint the
+port's own `libs/PlayNote` wavetable-playback library didn't account for.
+
+**Root cause**: `set_channel_speed()`'s real hardware register is clamped
+to `[0, 128]` (confirmed directly in the emulator's own source,
+`V32SPUWriters.cpp`'s `WriteSPUChannelSpeed`: `Clamp(Value.AsFloat, 0,
+128)`) - a request for a higher effective playback speed than that is
+silently clamped to exactly 128, not rejected or reported. PlayNote's own
+`playnote_start()` computes that speed as `freq_hz * wave_period_samples
+/ 44100.0`, so with `WAVETABLE_PERIOD_SAMPLES` originally `2048` (a
+wavetable with a ~21.5Hz natural pitch at speed 1.0), the *maximum
+representable frequency before hitting that clamp* was only `128 * 44100
+/ 2048 = 2756.25Hz`. Every one of Tiny Arkanoid's own intro-tune notes
+(5 distinct pitches, freq bytes 105/125/135/140/145, which `Sound()`'s
+own `500000/(255-freq)` formula turns into 3333-4545Hz) sat comfortably
+*above* that ceiling - so every single one got clamped to the exact same
+2756.25Hz, regardless of its own intended pitch. The tune's rhythm/timing
+survived completely intact (that's driven by the shared, platform-
+agnostic sequencer code, `arkNoteWaitFrames`) - only the pitch variation
+that makes it recognizable as a *melody* was gone, flattened to one
+monotone note repeated in rhythm. This is also why a single hit/blip
+sound effect in some other game sounding "a bit off" was never reported
+or noticed the same way a famous melody losing 100% of its pitch
+variation immediately was - a lone SFX's exact pitch isn't memorable the
+way a well-known tune's relative note-to-note shape is.
+
+Ruled out before landing on this explanation: whether this build's own
+`md_playTone()` needed the same "+1 frame" minimum-tone-duration fix its
+SDL3 sibling has (that fix exists there because `gFrameCounter` is a
+plain software int incremented as the first line of that build's own
+`md_updateAudio()`, so a 1-frame note can get started and expired within
+the same real frame before ever really sounding) - traced through this
+build's own real hardware timer instead (`get_frame_counter()` reads
+`TIM_FrameCounter`, incremented once per real frame by
+`V32Console::RunNextFrame()`'s own `Timer.ChangeFrame()` call, which runs
+*before* that frame's CPU cycle budget executes) and confirmed a note
+here already gets a full, correctly-timed real frame of playback with no
+equivalent race - so blindly porting that same "+1" over would have
+been an unverified, likely-wrong change (an extra frame of ring-on,
+overlapping the next note) chasing a bug that doesn't actually exist on
+this platform. Also checked and ruled out: the sibling `tinyjoypad_SDL3`
+repo's own copy of `gameTinyArkanoid.c` (confirmed byte-identical, no
+data/logic drift between the two projects' independently-maintained
+copies) and this build's own documented 250,000-cycle/frame budget
+(directly confirmed via live measurement that CPU usage during the intro
+scene never approaches 100%, ruling out frame truncation as a cause).
+
+**Fixed** by regenerating `libs/PlayNote/sounds/wt_saw.wav` at a shorter
+256-sample period (down from 2048) - preserving the exact same linear-
+ramp sawtooth shape and amplitude range (-9000..8991, matching the
+original file byte-for-byte in every way except the shorter cycle) and
+the same `period+1`-samples-with-a-repeated-first-sample loop-closing
+convention the original already used - and updating
+`WAVETABLE_PERIOD_SAMPLES` (`portVircon32.c`) to match. This raises the
+wavetable's natural pitch to `44100/256 ≈ 172.3Hz` and, with it, the
+speed-clamp ceiling to `128 * 44100 / 256 = 22050Hz` - comfortably above
+not just Tiny Arkanoid's own tune (now computing to speeds of 19.35-26.39,
+nowhere near the 128 ceiling) but also the most common frequency actually
+used elsewhere in this project's own 33 games (a direct grep across every
+literal `Sound()` call in `src/games/*.c` found freq byte 200 - resolving
+to ~9.1kHz - used 27 times, the single most common non-trivial value in
+the whole codebase). Verified: recomputed every one of Tiny Arkanoid's
+own 5 note frequencies against the new period and confirmed none any
+longer exceed the clamp; rebuilt the full ROM via `Make.sh` (including
+the `wav2vircon` asset-conversion step picking up the regenerated `.wav`)
+and confirmed a clean `BUILD SUCCESSFUL`; user-confirmed by ear afterward
+- the intro tune now plays correctly. Also directly confirmed this fix
+carries no CPU cost: `playnote_start()`'s only wavetable-period-dependent
+work is a single float multiply (`freq_hz * wave_period_samples /
+44100.0`), the same cost for any constant value, and the actual sample
+playback/mixing (`V32SPU::UpdateOutputBuffer()`'s own `Position +=
+Speed`) runs in the emulator's own audio-hardware-emulation pass,
+entirely outside `Constants::CyclesPerFrame` - the same way a real SPU
+chip generates audio without consuming the CPU's own instruction budget.
+If anything this is a small net positive: the wavetable asset itself
+shrank to about 1/8th its previous size (`obj/wt_saw.vsnd`: 1040 bytes).
+
+**Generalizable takeaway**: this is a *sixth*, structurally distinct
+mechanism from the five AVR-narrow-type bugs above, worth remembering
+alongside them - a real hardware/API constraint (a documented register
+clamp) interacting with a *deliberately chosen asset parameter*
+(`WAVETABLE_PERIOD_SAMPLES`) rather than with anything in the ported game
+code itself. Any future game whose own `Sound()`/`md_playTone()` calls
+lean on frequencies noticeably above the current ~22kHz ceiling (unlikely
+in practice - see the freq=200/220/240 survey above, all comfortably
+covered or, for the rarest/most extreme values, already above normal
+human hearing anyway) would be worth rechecking with the same "compute
+every distinct note's own `speed` value, check it against the clamp"
+method used here, rather than assuming a melody sounding "off" is a
+group-of-five-bugs-style narrow-type issue by default.
+
+## A pixel-grid presentation overlay, and a genuine "toggle doesn't visually take effect" bug found while verifying it
+
+Ported (not a straight port, see below) from the sibling `tinyjoypad_SDL3`
+project's own trio of presentation effects (glow/CRT-scanlines/pixel-grid)
+- deliberately **only** the pixel-grid one: the other two need real per-
+frame recomputation (glow's own downscale-then-blur, CRT's own scrolling
+scanline position) to stay correct without accumulating onto a persistent
+buffer, which has no equivalent design here, whereas the pixel grid is a
+plain, unchanging pattern - a thin 1px black outline around every one of
+the original 128x64 OLED pixels, so each reads as its own distinct cell
+once scaled up 5x instead of blending into a smooth block.
+
+**Implementation, chosen specifically because Vircon32's own screen size
+is fixed** (unlike a resizable SDL window, which is why the SDL3 sibling
+draws its own version as 194 individual filled rects, one per grid line):
+one pre-baked 640x320 texture (`assets/pixelgrid.png`, generated by tiling
+a single 5x5 corner-line tile across the whole game-area size - a
+transparent background with opaque black pixels only at each cell's own
+top/left edge) blitted with a single `draw_region_at()` call, relying on
+`blending_alpha` (confirmed the emulator's own default mode, and confirmed
+directly in `png2vircon.cpp`'s own source that a source PNG's real alpha
+channel survives conversion rather than being silently flattened to
+opaque) so only the opaque grid-line pixels actually affect the screen -
+the transparent majority of the texture is a no-op over whatever the game
+already drew. A new `PIXELGRID_TEXTURE_ID` (3rd texture, alongside the
+column atlas and the two thumbnail atlases) plus a matching `rom.xml`/
+`Make.sh`/`Make.bat` entry were needed for the new asset.
+
+Toggled by Button X (previously unused by this project - only A/Fire, B/
+Fire2, and Start were read anywhere), edge-detected the same way every
+other button-press-driven state change in this file already is. Off by
+default, and only ever processed/rendered while a game is actually
+running (`currentGameIndex != -1 && !confirmingQuit`) - never on the menu,
+matching the SDL sibling's own `!isInMenu`-equivalent gating, and not
+drawn on top of the quit-confirmation dialog either (a deliberate design
+choice: the dialog is meant to read as a clean modal, not have grid lines
+cut across it).
+
+**A real bug found immediately during verification, not assumed away**:
+toggling the grid ON worked first try (visually confirmed via a Puppeteer
+screenshot of 2048's own title screen), but toggling it back OFF appeared
+to silently do nothing - the grid just stayed on screen indefinitely
+afterward, confirmed reproducible across several different timing/hold-
+duration attempts before concluding it wasn't a test-timing artifact.
+Root cause, once actually reasoned through rather than kept blaming the
+test harness: the grid's own black lines are drawn directly into
+Vircon32's **persistent** GPU display buffer, permanently overwriting
+whatever game pixels used to be there - flipping `pixelGridEnabled` back
+to false only stops the *next* frame's own `drawPixelGridOverlay()` call
+from running, it does nothing to actually erase the lines already baked
+into the picture. The only thing that ever repaints those exact pixels
+is the game's own next genuine full redraw - but 2048 (obonoCoreShim
+lineage) skips its own redraw entirely on frames where nothing changed
+internally (the same `isInvalid`-gated skip this project's own quit-
+confirmation dialog already had to work around for an identical reason),
+so on its static title/attract screen, nothing was ever naturally going
+to trigger that redraw again. **Fixed** the exact same way the quit-
+dialog's own resume path already does: call
+`menu_getGame(currentGameIndex)->onResume()` (if non-NULL) the instant
+the toggle actually changes state, in *either* direction - forcing one
+fresh full redraw that frame regardless of whether the game itself
+thought anything needed repainting. Confirmed via Puppeteer, using the
+WebGL build: toggling ON then OFF now cleanly restores the exact original
+title-screen picture, no grid lines left behind.
+
+## A seventh bug, same family as the sixth: Tiny Pacman's own sound effects all collapsing to their very last tone
+
+Found from a direct user report ("on a video on youtube I noticed there's
+a little pacman tune playing on game start... it seems to be missing in
+our port"), then, once that first fix surfaced the pattern, found again
+independently in three more places in the same file via a follow-up
+question ("what about the sound when pacman takes a pill to catch
+ghosts"). All five instances share one root cause: `gameTinyPacman.c`
+fired every one of upstream's `Sound(freq,dur)` calls for a given effect
+back-to-back, in a single synchronous burst, with no real time elapsing
+between them. Upstream's own `Sound()` genuinely blocks (a real bit-bang,
+so N calls take N times as long in real wall-clock time and are each
+audible in turn); this engine's `md_playTone()` has no such queue - each
+call immediately replaces whatever tone is currently sounding, so a burst
+of N calls issued with zero elapsed real time between them is only ever
+*audible* as the very last one. Same root cause and same fix shape as the
+sixth bug above and every other oversized/multi-call `Sound()` burst
+already found and fixed elsewhere in this project (Tiny Arkanoid, Tiny
+Missile, Tiny Arena, Tiny Gilbert, Tiny SQuest, Tiny Plaque, Tiny Pipe) -
+just the first time this exact bug turned out to affect *five separate
+cues in one file* rather than a single jingle.
+
+**1) Start-of-game jingle** (`pacMusic[141]`, a real 70-note table,
+triggered once when a fresh game begins). Two independent bugs stacked
+here: the sequencing bug above (70 calls in one burst, collapsing to the
+last note), *and* the pitch/duration conversion formula already baked
+into the port before this session (`pacMusic[t]-8` for frequency,
+`(pacMusic[t+1]-100)/1000.0` for duration) was itself wrong, unrelated to
+the sequencing issue - it computed pitches in the 100-170Hz range (a low
+bass rumble) and a flat ~155ms per note regardless of the table's real
+values, nothing like upstream's actual melody. Found only because the
+first fix attempt (preserving that formula, just fixing the sequencing)
+produced an implausible ~10.85s total duration - checking upstream's real
+`Sound(uint8_t freq,uint8_t dur)` bit-bang implementation directly
+(`tinypacman.ino:401-408`) gave the correct formula instead: each `Sound`
+call is `dur` full HIGH/LOW cycles, each half-cycle `(255-freq)`
+microseconds, i.e. `freqHz = 500000/(255-freqByte)` and
+`durationSeconds = durByte*2*(255-freqByte)/1e6` - the same formula
+`tinyJoypadShim.c`'s own shared `Sound()` already uses elsewhere in this
+project. Recomputed with the correct formula: ~4.4 real seconds, pitches
+2778-5882Hz, a plausible chiptune melody range. **Fixed** with a new
+`PAC_STATE_MUSIC_WAIT` state (`pacMusicIndex`/`pacMusicNoteWaitFrames`) -
+one note per real logic tick, freezing the just-initialized Pac-Man/ghost
+scene on screen for the tune's own real duration, the same frame-stepped-
+sequencer pattern Tiny Arkanoid's own `arkStartNoteSeq`/
+`arkAdvanceNoteSeq` already established. Deployed and user-confirmed
+correct by ear afterward (a stale browser-cached ROM briefly caused a
+false "plays way too fast" report mid-session - not a real bug, resolved
+by re-testing against the actual current build).
+
+**2) Ghost-eaten cue** (`Sound(20,100);Sound(2,100);`, fired when
+Pac-Man touches a vulnerable ghost during power-pellet mode) and **3) dot-
+eaten "waka" cue** (`Sound(10,10);Sound(50,10);`, fired on every normal
+dot) - both just two-call bursts, same collapse. Both call sites were
+also using raw byte values directly as literal Hz/seconds (e.g.
+`md_playTone(20.0, 0.1)` for a freq *byte* of 20) rather than the real
+formula - fixed with correctly-derived real values (ghost: 2127.7Hz/
+0.047s then 1976.3Hz/0.051s; dot: 2040.8Hz/0.005s then 2439.0Hz/0.004s).
+Unlike the three jingles below, these don't need to freeze gameplay -
+added a small standalone, reusable two-note player (`pacStartSfx2()`/
+`pacAdvanceSfx()`, `pacSfxFreq`/`pacSfxDur`/`pacSfxLen`/`pacSfxPos`/
+`pacSfxWaitFrames`) advanced once per logic tick alongside normal play,
+declared ahead of `pacCollisionPac2Caracter()`/`pacDotsWrite()` (its two
+call sites) since this dialect requires definition before use - both are
+earlier in the file than every other `PAC_STATE_*` machinery, which lives
+down in `gameTinyPacman_update()` itself.
+
+**4) Death jingle** (`Sound(100,200);Sound(75,200);Sound(50,200);
+Sound(25,200);Sound(12,200);` then a real `delay(400)`, fired on losing a
+life or ending the game) - a 5-call burst, same collapse, plus the same
+raw-byte-as-literal-Hz mistake as the two cues above. **Fixed** with a new
+`PAC_STATE_DEATH_SWEEP` state (`pacDeathNoteIndex`/`pacDeathWaitFrames`),
+transitioning into the pre-existing `PAC_STATE_DEATH_WAIT` once all 5
+notes finish - and `PAC_STATE_DEATH_WAIT`'s own existing
+`pacWaitFrames = PAC_FPS*2/5` (12 ticks = exactly 0.4s at this file's
+30-tick/sec rate) turned out to already be a correct port of upstream's
+own trailing `delay(400)`, not (as it looked in isolation before this
+fix) an undersized stand-in for the whole jingle - restructuring the
+trigger to play the jingle *then* fall into that existing wait reproduces
+upstream's real ~0.805s total pause (jingle + delay) exactly, using code
+that was already there.
+
+**5) Level-clear sweep** (`for(r=0;r<60;r++){Sound(2+r,10);
+Sound(255-r,20);}`, fired once every dot in a level is gone, then a real
+`delay(1000)`) - the largest burst of the five, 120 individual calls.
+Reproducing all 120 one-per-logic-tick (this file's 30 ticks/sec) would
+take a full 4 real seconds, far longer than upstream's own genuinely fast
+bit-banged sweep (~0.3s) - downsampled the loop's own step size instead
+(stride 4, 15 steps instead of 60, `PAC_LEVELCLEAR_SWEEP_STRIDE`/
+`PAC_LEVELCLEAR_SWEEP_STEPS`), matching the established fix for every
+other oversized computed sweep in this project (Tiny Missile/Arena/
+Gilbert/Pipe) rather than trying to play all 120 real notes. **Fixed**
+with a new `PAC_STATE_LEVELCLEAR_SWEEP` state
+(`pacSweepStepIndex`/`pacSweepSubNote`/`pacSweepWaitFrames`), transitioning
+into the pre-existing `PAC_STATE_LEVELCLEAR_WAIT` once done (matching
+upstream's own trailing `delay(1000)` the same way the death jingle's fix
+does above).
+
+Verified via Puppeteer on the rebuilt WebGL ROM: menu thumbnail/selection
+still correct, launching into Tiny Pacman still shows the frozen maze
+scene during the (now audibly longer, correctly-paced) start jingle, and
+active movement/dot-eating afterward renders correctly with ghosts
+leaving the box and dots disappearing along Pac-Man's path - confirming
+the restructured control flow (2 new SFX-player globals moved earlier in
+the file, ahead of their first call sites, plus 2 new `PAC_STATE_*`
+states) didn't break or freeze normal gameplay. The death jingle and
+level-clear sweep states themselves were not independently triggered in
+this session's own testing (would need reaching an actual death or
+clearing a full board) - both are structurally identical to the already-
+verified `PAC_STATE_MUSIC_WAIT` pattern, just with different trigger data,
+so risk is low, but worth a direct check if anything sounds off.
+
+## An eighth bug, same family as the sixth/seventh: the "burst collapses to one tone" bug found in ten more games via a project-wide audit
+
+After fixing Tiny Pacman's five sound bugs above, a direct user question
+("what about the sound when pacman takes a pill to catch ghosts") led to
+finding one more instance in that same file, which prompted a project-
+wide audit rather than continuing to fix these one report at a time.
+Grepped every game file for `md_playTone(...)` called directly (bypassing
+`tinyJoypadShim.c`'s `Sound()` wrapper) and separately for `Sound(...)`
+calls appearing more than once on the same source line or inside a `for`
+loop - both strong signals of the same bug shape, since a burst of N
+calls fired with zero real time between them is only ever audible as the
+very last one (`md_playTone()`, and therefore `Sound()` which calls into
+it, has no queue - confirmed directly by reading `portVircon32.c`'s own
+implementation: it unconditionally calls `playnote_stop_all()` before
+starting any new tone, discarding whatever was previously playing,
+regardless of the underlying PlayNote library's own real 16-channel
+capability, which this wrapper deliberately doesn't use).
+
+**Ten more games had this bug, all fixed the same way** (a small non-
+blocking multi-note sequencer, one note per real/logic tick, matching the
+`PAC_STATE_MUSIC_WAIT` shape above - a few used a fixed jingle needing its
+own freezing state, most used a lightweight "advance once per tick
+regardless of state" player since they don't need to freeze gameplay):
+
+- **Tiny Bomber** - three real bugs, plus two bonus finds from reading
+  upstream directly rather than trusting the port's own prior "simplified"
+  comment: (1) the death sound (two call sites - enemy collision and
+  bomb self-damage - both firing the same `md_playTone(200,0.3);
+  md_playTone(100,0.3);` pair synchronously) fixed with a small
+  `bomStartSfx2()`/`bomAdvanceSfx()` non-blocking player; (2) the 22-note
+  start-game jingle (`bomMusic[]`, a direct byte-for-byte match to
+  upstream's own `Music[]` table) fixed with a new `BOM_STATE_MUSIC_WAIT`
+  state, freezing gameplay the same way Pacman's own start jingle does;
+  (3) while deriving this state's own note-index bound, found that
+  upstream's own loop (`for(t=0;t<=42;t=t+2)`) reads one pair *past* the
+  end of its 42-element `Music[]` table - harmless on real AVR/PROGMEM,
+  a genuine out-of-bounds global read here - capped at the real 21 valid
+  pairs instead of reproducing the stray read; (4) upstream's own
+  game-over buzzer (`for(t=0;t<5;t++){Sound(100,100);Sound(1,100);}`,
+  fired from *both* death paths once lives reach 0) had no port
+  equivalent at all - not even a collapsed one, just silence - restored
+  via the same small SFX player, extended to a 10-note buzzer.
+- **Tiny Invaders** - four bugs: the level-cleared fanfare (5 tones, the
+  trailing duplicate `Sound(60,255)` deduped, matching upstream's own
+  effective 5 distinct pitches), a "crawling"/ship-dying tick sound that
+  fires every real frame while active (`Sound(80,1);Sound(100,1);` each
+  time) - fixed by alternating a single tone by parity instead of firing
+  both every frame, the same technique this file's own monster-march step
+  sound already uses for an identical shape, rather than a multi-tick
+  sequence that would never finish before being retriggered - the
+  UFO-destroyed sweep (`for(x=1;x<100;x++){Sound(x,1);}`, 99 real notes,
+  downsampled to 15 via stride 7), and `tinvBebeep()` (a 2-tone confirm
+  cue, fired once when Fire is pressed on the attract/intro screen).
+- **Tiny Pinball** - five bugs: `tpFalseBall()`'s 50-note descending sweep
+  (downsampled to 13, stride 4), the bonus-ball-slot's 9-note ascending
+  sweep (kept in full, already modest), the bumper "bounce push" 3-tone
+  cue, the title screen's own already-"approximated" 5-tone sweep
+  (upstream's real double 255-step sweep, 510 calls total, already
+  reduced to 5 representative tones by an earlier session - that
+  reduction was sound, but the 5 tones still fired as one synchronous
+  burst, so only the last was ever audible even with the "approximation"
+  already applied), and the game-over buzzer (matching Bomber's own
+  `for(t=0;t<5;t++){Sound(100,100);Sound(1,100);}` shape exactly, same
+  fix).
+- **Tiny Doc, Tiny Trick, Tiny Tris** - each has a central `snd`-number
+  sound dispatch function (`tdSndTdoc()`/`trkSndTrk()`/`trisSndTtris()`)
+  whose own header comment already said "simplified - see header comment"
+  or "simplified long tone-loops" - a deliberate design choice made
+  *before* this project had established the frame-stepped-sequencer
+  pattern (first used for Tiny Arkanoid), reducing upstream's own long
+  computed sweeps to a "handful of representative tones." That reasoning
+  assumed a short burst would still sound like several distinct tones -
+  wrong on this engine, since the call *count* doesn't matter, only
+  whether there's more than one with no gap between them. 4 of Doc's 7
+  branches, 7 of Trick's 8, and 5 of Tris's 6 were multi-tone bursts,
+  fixed with a small per-file byte-pair sequencer (`Sound(freqByte,
+  durByte)` called directly, no formula re-derivation needed since
+  `Sound()` itself already converts). Doc/Trick's fixes needed to match
+  each file's own real tick rate for wait-frame math (Doc ticks at 30/sec
+  via `TD_TICK_DIVISOR`; Trick and Tris have no whole-function divisor,
+  ticking at the real 60fps).
+- **Tiny Morpion** - two bugs, both fixed by adding a 4th mode (a fixed
+  2-note cue) to the file's own pre-existing generic note-runner
+  (`tmorpionAdvanceNote()`, modes 0-2 already existed for other cues):
+  the blink-winner cue (`Sound(140,10);Sound(220,4);`, fired repeatedly
+  during the win-blink animation) and `tmorpionSoundStart()`'s own
+  session-start cue (`Sound(100,250);Sound(20,250);`, on two separate
+  lines - missed by the initial same-line grep pass, found only once
+  every `Sound(` call in the file was read individually). The
+  blink-winner site needed its own explicit `tmorpionAdvanceNote()` call
+  added too - that branch `return`s before ever reaching the shared call
+  used by the normal-play/endgame-sweep states, so a queued note there
+  would never have actually advanced without it.
+- **Tiny Pipe** - three bugs (SND_TPIPE(0)'s 5-note confirm chime, a
+  kill-sprite 2-tone cue, and a 6-note bonus-life jingle), fixed with a
+  new small byte-pair sequencer separate from the file's own existing
+  500-call-sweep-specific one. The confirm chime's own code comment
+  claimed it was "harmless as a synchronous burst (only 5 calls)" -
+  itself a real, now-corrected misunderstanding: call *count* was never
+  the determining factor, only whether there's more than one call with no
+  gap between them, so even 2 calls collapse exactly the same way 500
+  would. The bonus-life jingle is the most audible case in this whole
+  audit: its last call is literally `Sound(0,255)` (upstream's own
+  deliberate silent "rest," alternating with `Sound(200,255)` for a
+  beep-beep-beep pattern) - meaning the *entire* jingle was previously
+  playing as complete silence, not just a wrong tone.
+- **Tiny Bert** - one bug, `bertDeadSound()`'s own
+  `for(s=200;s>100;s--) Sound(s,10);` (100 real notes), downsampled to 13
+  via stride 8, same shape as Pinball's `tpFalseBall()` fix.
+- **Tiny Bike** - two bugs (`bikAddLive()`'s 3-tone bonus-life burst, and
+  a 2-tone race-start cue), both routed through this file's own existing
+  `bikStartNoteSeq()`/`bikAdvanceNoteSeq()` sequencer (already built for
+  the intro/win jingles) rather than a new one. Doing this exposed a real
+  gap in that existing mechanism: `bikAdvanceNoteSeq()` was previously
+  only ever called from two specific states (`BIK_STATE_START_LINE`/
+  `BIK_STATE_LEVEL_WIN_WAIT`), so a sequence triggered from `bikAddLive()`
+  (mid-gameplay) or the race-start cue (triggered from `BIK_STATE_ATTRACT`,
+  which passes through two *other* states before ever reaching
+  `START_LINE`) would never actually have advanced. Fixed by moving the
+  advance call to run unconditionally once per real frame at the top of
+  `gameTinyBike_update()`, with the two original call sites changed to
+  check `!bikNoteSeqActive` (the same information their old return value
+  gave them) instead of calling it a second time - avoids double-advancing
+  the sequencer during the one state that used to call it directly.
+
+**A related, deliberate revert, done on direct user request rather than
+found as a new bug**: Tiny Missile's dome-explosion sound
+(`gameTinyMissile.c`, inside its explosion-animation loop) previously
+fired `SNDBOX`-equivalent sound only on the tick an explosion begins
+(`tmisDome[t].frame==1`), rather than upstream's own literal "every one
+of the 6 explosion-animation ticks" - a deliberate fix from earlier this
+session for a real reported "stuck buzz" (retriggering a multi-tick
+sequence every animation tick, rather than upstream's own near-
+instantaneous blocking beep, produced an audible stutter). Reverted back
+to upstream's literal per-tick call at the user's explicit request,
+accepting the risk that the original "stuck buzz" symptom may return -
+flagged clearly before making the change, user confirmed "yes fix it"
+anyway.
+
+Verified via Puppeteer: all ten fixed files compile clean individually
+(rebuilt and confirmed `BUILD SUCCESSFUL` after every single game's
+fix, not just once at the end) and Tiny Bomber - the game with the most
+invasive changes (a new frozen jingle state plus the two-site death-sound
+fix) - was screenshot-tested through menu selection, launch, the frozen
+start-jingle scene, and post-jingle gameplay (movement + bomb placement),
+confirming no crash/freeze/corruption from the restructuring. The other
+nine games were verified via a clean individual rebuild only, not
+independently screenshot-tested this session - each fix is mechanically
+consistent with the same pattern proven working in Bomber and in Pacman's
+own earlier, separately-verified fix, but worth a direct play-test if
+anything sounds off.
+
+## A project-wide audit for entirely missing (not just collapsed) sound cues
+
+A direct follow-up question ("also check for missing musics") after the
+burst-collapse audit above prompted a *second*, separate kind of check -
+not "does this event's sound play correctly," but "does this event have
+*any* sound call in the port at all." Dispatched 4 parallel background
+agents, each covering ~8 games, comparing every upstream `Sound()`/
+`TinySound()`/`beep()` call site (including companion C++ class files,
+not just the main `.ino`) against the port's own `.c` file for a matching
+event. 29 of 33 games came back completely clean (either full coverage or
+upstream genuinely has no sound to begin with - confirmed for Tiny
+Dungeon via its own `NO_SOUND` build guard, and Four in a Row/Dino Game
+via a direct grep finding no functional sound code anywhere in their
+upstream source, just a vestigial unused pin definition in Dino Game's
+case).
+
+**Four genuine omissions found and fixed**, all via the same session's
+own established small-sequencer patterns:
+
+- **Tiny Bomber** - the level-start jingle (upstream's `NEWLEVEL:` label:
+  `for(t=0;t<=4;t++){Sound(80,100);delay(300);}`, 5 identical beeps with a
+  real 300ms gap between each) had no port equivalent at all - not the
+  start-of-*game* jingle already fixed above (a different event, the
+  22-note `bomMusic[]` table played once when `bomInGame` first goes
+  active), but a *separate* cue firing on every level transition.
+  Reproduced with a new `bomStartLevelJingle()` (extending the file's
+  existing `bomSfxFreq`/`bomSfxDur` player with a new parallel
+  `bomSfxExtraFrames[]` array - the real `delay(300)` gap after each
+  beep's own tone finishes, 0 for this file's other cues which have no
+  such gap upstream) called from `bomBeginNewLevel()`, matching upstream's
+  own `if(Level>-1)` guard exactly (skips the very first NEWGAME->level-0
+  transition, plays on every one after).
+- **Tiny Tris** - `trisSndTtris(4)` (the new-game confirm chime,
+  `Sound(20,150);Sound(100,150);`) was already correctly implemented as a
+  dispatch case (from this session's own earlier burst-collapse fix pass)
+  but was never actually *called* anywhere - upstream fires it right when
+  the player presses Fire on the attract screen
+  (`INTRO_MANIFEST_TTRIS()`), a call site the port's own
+  `TRIS_STATE_ATTRACT` handler never had. Fixed by adding the one missing
+  call.
+- **Tiny Missile** - `Destroy_TMISSILE()`'s own descending 4-note tone
+  (`TinySound(Sn_=Sn_-45,4)`, fired once per missile slot scanned -
+  `TMIS_NUM_MISSILE`(4) times per call, *outside* the active/hit check, so
+  it always plays all 4 notes regardless of which missiles were actually
+  live) had no port equivalent in `tmisDestroy()` at all. This is also a
+  genuine multi-call burst in its own right (4 synchronous calls, same
+  family as every bug in the section above) - fixed with a new
+  `tmisDestroyNotes[8]` table (210/165/120/75, each dur 4, matching
+  `Sn_`'s own arithmetic) routed through this file's own existing
+  `tmisStartNoteSeq()`/`tmisAdvanceNoteSeq()` sequencer.
+- **UFO** - the thruster hum while climbing (`beep(1,random(0,i*2))`,
+  called up to 6 times per real tick inside a 3x2 nested loop while
+  actively flying up with room left to climb) had no port equivalent.
+  Approximated as a single representative `ufoBeepOnce(1, arand(4))` per
+  tick instead of the full nested loop - both to avoid reintroducing the
+  same burst-collapse issue this session already fixed elsewhere (6 near-
+  identical short blips colliding into one), and because the original's
+  own randomized sub-frame durations have no meaningfully different
+  audible result at 6x redundancy.
+
+Verified via Puppeteer after rebuilding: the ROM boots cleanly, the full
+33-game alphabetized menu renders correctly across all 4 pages, and both
+Tiny Bomber (already screenshot-verified above through the frozen
+start-jingle scene and post-jingle gameplay) and UFO (launched cleanly
+into its own attract screen, held Up to exercise the new thruster-hum
+code path) show no crash, freeze, or visual corruption from any of the
+four fixes. The other two games (Tris/Missile) were verified via a clean
+individual rebuild only, not independently screenshot-tested this
+session - both changes are small, mechanically consistent additions
+(one new function call; one new note table wired into an already-proven
+sequencer) rather than structural changes, so risk is low, but worth a
+direct check if anything sounds off.
+
+## `md_playTone()` became genuinely multi-voice, replacing the single shared channel this whole project was built on
+
+A direct follow-up request ("make pacman eating pills audible while the
+alarm sounds goes off... really don't gate it to single channel calls")
+asked for something the entire audio model above couldn't do: Tiny
+Pacman's power-pellet siren (retriggered every real tick while active,
+`md_playTone((float)(255-pacTimerGobeActive), 0.01)`) and its dot-eaten/
+ghost-eaten SFX shared the same single tracked "audioVoice" `md_playTone()`
+has used since the very first Arkanoid audio investigation this session -
+so whichever fired more recently always cut the other one off, and this
+was true for every game in the cartridge, not just Pacman.
+
+First attempt was a targeted fix - a second, independent channel
+(`md_playTone2()`/`md_stopTone2()`) specifically for Pacman's siren,
+leaving every other game's own single-voice `md_playTone()` untouched -
+reasoned as lower-risk than a global change, since some other games'
+own retriggered-tone cues (monster-march steps, footstep ticks) are
+*meant* to replace themselves each call, not stack.
+
+**The user pushed back twice, correctly, before this shipped**: first
+"can't we make playtone pick the next channel" (questioning why a
+hand-built second slot was needed at all, rather than just letting
+every call use a fresh channel), then, once a hand-wavy "the SDL3
+backend can't easily do this" justification came up, "playtone lib
+should already do this" - pointing directly at `playnote_start()`
+itself. Reading it confirmed the user was right: `playnote_start()`
+already calls Vircon32's own `play_sound()`, which picks the first free
+SPU channel *internally* - `md_playTone()` never needed to manually
+track a single voice at all, it was just fighting PlayNote's own
+already-correct channel management by forcing `playnote_stop_all()`
+before every call.
+
+**Fixed properly**: replaced the single `audioVoice`/`audioStopAtFrame`
+pair with a 16-element `audioStopAtFrame[]` array indexed by actual
+channel number. `md_playTone()` now just calls `playnote_start()` and
+records whichever channel it returns; `md_updateAudio()` loops over all
+16 channels checking each one's own expiry independently. No per-game
+opt-in, no second API - every existing `md_playTone()` call site across
+every game gets this for free. The earlier two-channel version
+(`md_playTone2()`/`md_stopTone2()`, and Pacman's own call routed through
+it) was fully reverted before this shipped - grepped for both names
+project-wide to confirm zero references remained.
+
+**Why this doesn't break the "replace, don't stack" cues it was
+initially worried about**: every frame-stepped sequencer already built
+this session (and every one already in the project before it -
+`arkAdvanceNoteSeq`, `tmisAdvanceNoteSeq`, etc) gates its own next note
+to start only once the previous note's real duration has elapsed, via
+its own `waitFrames` bookkeeping - so by the time any such sequence's
+next call happens, the previous note has normally already auto-expired
+and freed its channel back up via `md_updateAudio()`, same as before.
+The only thing that actually changed is what happens when two
+*genuinely concurrent* cues overlap in time (Pacman's per-tick siren vs.
+a dot-eaten blip landing in the same window) - exactly the case that was
+broken, and exactly what was asked for.
+
+Verified via Puppeteer after rebuilding: both Tiny Pacman (through the
+start jingle, into active gameplay, dots visibly eaten and ghosts
+moving out of the box after extended movement) and Tiny Bomber (start
+jingle, movement, bomb placement) render and play correctly with no
+crash or corruption - a meaningful check here since this change touches
+the one shared audio primitive every game in the cartridge calls into,
+not just Pacman's own file.
+
+## A global sound on/off toggle, added on direct request after comparing against the sibling SDL ports
+
+A follow-up question ("can sound be turned off/on by button press +
+debounce in this port?") revealed a real asymmetry: the sibling SDL
+ports (`tinyjoypad_SDL3`/`Tinyjoypad_SDL`) have a dedicated, always-
+available mute button (`BUTTON_SOUNDSWITCH`) working identically across
+all 33 games, but this Vircon32 build had no equivalent - only 5 specific
+AttinyArcade-lineage games (Stacker, Wren Rollercoaster, Bat Bonanza/Pong,
+Frogger, UFO) have their own *local*, upstream-inherited "hold Fire ~2s"
+secret mute gesture, faithfully ported from those specific games' own
+original behavior - not a project-wide feature, and a different debounce
+shape entirely (a hold-duration threshold + an action-done flag, not a
+single-press edge check).
+
+Added a genuine global toggle on request, modeled on the SDL ports' own
+`gMuted` design: **Button Y** (the last of the 4 face buttons still
+unused by this project - A=Fire, B=Fire2, X=pixel-grid toggle, Start=quit
+dialog), a plain single-press edge check
+(`muteButton && !prevMuteButton`), toggling a new `audioMuted` bool.
+Deliberately **not** gated to "a game is running" the way the pixel-grid
+toggle is (see that feature's own write-up above) - works identically on
+the menu, mid-game, and during the quit-confirmation dialog, matching the
+SDL ports' own always-available behavior rather than the pixel-grid's
+own gameplay-only scope.
+
+**Implementation is simpler than the SDL ports' own fix required**:
+Vircon32 has a real hardware master-volume register exposed as
+`set_global_volume(float)`/`get_global_volume()` (`audio.h`, range 0-2) -
+muting is just `set_global_volume(0.0)`, unmuting `set_global_volume(1.0)`.
+No need to gate every individual `md_playTone()` call or touch the
+multi-voice mixing added earlier this session at all - the SPU's own
+volume register applies to every channel uniformly, so this composes
+cleanly with the just-added multi-voice fix without any interaction
+between the two.
+
+One dialect gotcha hit immediately: `audioMuted ? 0.0 : 1.0` (the natural
+first attempt) doesn't compile on this platform (`character '?' is not a
+valid identifier start` - this compiler has no ternary operator, a
+long-standing documented restriction throughout this project) - rewritten
+as a plain `if`/`else` instead.
+
+Verified via Puppeteer: toggling the button on the menu screen, then
+launching a game while muted, then toggling again mid-game to unmute -
+all three transitions rendered correctly with no crash, freeze, or visual
+corruption. Audio correctness itself (does it actually silence/restore
+sound) wasn't verifiable via screenshot the same way the multi-voice fix
+above couldn't be either - worth a real play-test to confirm.
+
+## Tiny Missile's `ATTACK_WEAPON()` bug generalized into a project-wide audit for "loop's own re-checked condition flattened away" bugs
+
+A direct follow-up request ("can verify if there are any other such
+upstream vs downstream porting bugs... in all games i mean") turned the
+Tiny Missile fix above into a targeted, project-wide sweep. The bug
+class: an upstream `while`/`goto`-shaped loop whose own condition is
+re-checked *fresh on every iteration* (not just once, at the top) gates
+a call into a function with its own internal state-dependent branching -
+porting that loop into a frame-stepped state can silently drop the
+per-iteration recheck, either doing more than upstream (calling the
+inner function when it shouldn't) or less (stopping too early).
+
+Dispatched 4 parallel background agents, each covering ~8 games,
+specifically hunting for this shape (not general code review, not the
+sound-effect bugs already fixed earlier this session, not the byte-
+truncation/shift-wraparound/signed-sentinel bug family already
+extensively documented elsewhere in this file) - reading every upstream
+`while`/`goto` construct (including companion C++ class files, not just
+the main `.ino`) and tracing whether the port's own conversion preserves
+the exact re-check cadence.
+
+**31 of 32 remaining games came back clean** (Tiny Missile itself was
+already fixed and excluded from the sweep). Tiny Plaque's own
+`ADD_TEETH_TPLAQUE()`/`PUT_TEETH_TPLAQUE()` teeth-pool scan is
+structurally the closest analog to Missile's own bug (a genuine resource-
+pool-drain loop with per-candidate re-checking) and got the deepest
+individual scrutiny of the whole audit - confirmed already correctly
+ported, re-checking `extraTeeth > 0` fresh at each candidate and short-
+circuiting the remaining scan the instant the pool empties, matching
+upstream's own edge case (a call with an already-empty pool still
+consumes its "turn" without activating anything) exactly.
+
+**One real bug found: Tiny Bike.** Upstream's own per-tick movement loop:
+```c
+for (t=0; t<CHECK_SPEED_ADJ(ACCEL); t++){
+  INCREMENTE_SCROLL(); if (DIV1==3) {...TRACK_RUN_ADJ();...} else{DIV1++;}
+}
+```
+A plain C `for` loop re-evaluates its bound *every iteration* - so
+`CHECK_SPEED_ADJ(ACCEL)` (which also has its own side effect,
+`Higher_adj(ret)`, updating the jump-arc physics constant) is called
+fresh each pass against whatever `ACCEL` currently is. `ACCEL` is not
+read-only inside the loop body: `INCREMENTE_SCROLL()` ->
+`RefreshPosSprite()` -> `CheckCollision()` -> `analise_minutieuse()` can
+reduce it mid-loop via an oil-slick hit (`ACCEL-=0.20`), and a hard ramp
+landing via `Break_Gravity()` (`ACCEL-=2`) can too - so a same-tick
+collision correctly shortens the *remaining* iterations and re-derives
+the jump-height constant against the new, slower speed.
+
+The port (`gameTinyBike.c`) had instead hoisted this to
+`int speedTicks = bikCheckSpeedAdj( bikAccel ); for(t=0;t<speedTicks;t++)`
+- computed once, before the loop, with the SAME reachable mid-loop
+`bikAccel` reduction paths (`bikAnaliseMinutieuse()`'s oil-slick case,
+`bikBreakGravity()`) present in the port too (confirmed directly, not
+just inferred from the agent's report). Effect: after a same-tick
+oil-slick hit or hard landing, the port kept running the loop for the
+*original* (higher, pre-collision) iteration count instead of correctly
+shortening it, over-advancing scroll/track state that tick, and left
+`bikHigherJump` computed from the stale pre-collision speed instead of
+being refreshed - a different (less-gentle) jump arc than upstream
+immediately after a mid-tick deceleration event. **Fixed** by moving the
+`bikCheckSpeedAdj( bikAccel )` call directly into the loop condition,
+matching upstream's genuine per-iteration re-evaluation instead of a
+single hoisted value.
+
+Verified via Puppeteer after rebuilding: Tiny Bike launches, plays
+(acceleration, wheelie tilt, track scrolling, HUD) with no crash or
+corruption - didn't specifically force an oil-slick-hit-mid-loop frame to
+visually confirm the corrected shortened-iteration behavior itself
+(audio/physics-timing side effects aren't screenshot-verifiable the same
+way a crash would be), so worth a direct play-test focused on that exact
+scenario if time allows. The other 31 games' own audits were report-only
+(no files touched) and are not independently re-verified beyond the
+agents' own traced reasoning - each report is detailed enough (exact
+upstream line numbers, exact port line numbers, the precise re-check
+condition compared) to re-check by hand if anything seems off later.
+
+## Tiny Bike: no motor sound exists upstream (confirmed, not a bug); a real "pedaling" animation gap found and fixed while checking
+
+A direct follow-up question ("is it possible in tiny bike the motorsound
+and the player on the moving bike animation is not playing as intended")
+had two genuinely different answers.
+
+**Motor/engine sound**: upstream has none at all - checked every real
+`Sound()` call site in `Tiny-Bike.ino` (`intro_sound()`'s 7-note jingle,
+the race-start 2-tone confirm, a collision-type-4 `Sound(200,4)`, and
+`ADD_LIVE()`'s 3-tone bonus-life cue) and found nothing tied to
+acceleration/movement itself - only one-shot event cues, matching what
+this session's own earlier missing-sound-cue audit already found (no
+cue was missing, because none exists to miss). Not a gap in the port.
+
+**Player animation**: a real gap, found by re-reading upstream's actual
+`while(1)` main loop line by line rather than trusting the earlier
+`speedTicks` fix to have been the only issue in that area. Upstream:
+```c
+uint8_t t=0;                    // declared once, right before the race begins
+...
+while(1){
+  ...
+  if ((TRIG_OK==0)&&(Wheel_up==1)&&(t>0)) {animBike=(animBike==1)?6:1;}
+  ...
+  for (t=0;t<CHECK_SPEED_ADJ(ACCEL);t++){...}   // t re-declared fresh here, every tick
+```
+`t` is checked at the TOP of each tick (gating the "pedaling" animation
+toggle between frames 1/6) BEFORE that same tick's own speed-loop
+overwrites it - so `t>0` really means "did the *previous* tick's speed-
+loop run at least once," i.e. "was the bike moving fast enough last tick
+for `CHECK_SPEED_ADJ(ACCEL)` to return nonzero." Upstream deliberately
+suppresses the pedaling animation while nearly stationary (freshly
+spawned, right after a crash, or before the player starts accelerating).
+
+The port's own `t` (`gameTinyBike.c`, the speed-loop variable touched by
+the `speedTicks` fix above) is a plain local, freshly declared inside
+`gameTinyBike_update()` on every call - it can't carry a value across
+real ticks the way upstream's persistent global does. The port's own
+pedaling-toggle condition (`if(bikTrigOk==0 && bikWheelUp==1)`) was
+simply missing the third condition entirely, not approximating it
+incorrectly - so the port animated pedaling *unconditionally* whenever
+not mid-wheelie-adjustment, including while genuinely stationary.
+**Fixed** with a new persistent global, `bikPrevSpeedTicks` (reset to 0
+in `bikBeginPlaying()`, matching where upstream's `t=0` sits relative to
+the race actually starting; captured as `bikPrevSpeedTicks = t;`
+immediately after the speed-loop finishes each tick, for the *next*
+tick's own check to read) - the pedaling-toggle condition now reads
+`bikTrigOk==0 && bikWheelUp==1 && bikPrevSpeedTicks>0`, matching
+upstream's real three-condition gate exactly.
+
+Ported to the SDL sibling project (`Tinyjoypad_SDL`) identically, in the
+same session, same file (`gameworld/games/gameTinyBike.c`) - both
+projects rebuilt clean (Vircon32 via `Make.sh`, both `sdl3`/`sdl2` via
+`cmake --build`). Verified via Puppeteer on the Vircon32 build: launched,
+sat idle briefly, then accelerated - no crash or visual corruption
+through the transition - but didn't specifically isolate a frame-by-frame
+comparison of "pedaling animates correctly only once moving" the way a
+screenshot could prove wrong before the fix, since a still image can't
+show whether a *sequence* of frames animates or holds - worth a direct
+play-test focused on that specific visual detail (does the rider's
+pedaling motion stay still while stationary, only kicking in once
+moving) if time allows.
+
+## Tiny Bike locked to 30fps (whole-tick), confirmed by direct user play-test
+
+Investigating the pedaling-animation gap above led to a static cycle-
+count of the real I2C bit-bang driver (`FastTinyDriver.cpp`, delay-free
+ASM) to estimate upstream's real, uncapped tick rate - the estimate
+suggested upstream might run *faster* than 60fps, not slower, which
+didn't explain a "too fast" perception through a simple timing-mismatch
+theory. Rather than trust an uncertain static estimate over a live
+report, the user asked directly to try locking the game to 30fps as a
+test ("it seems the game may be running too fast judging from arduboy
+port") - tried, played, and confirmed as the right fix.
+
+Implemented as a whole-function tick-skip (`BIK_TICK_DIVISOR = 60/30 =
+2`), the same shape already used for Tiny Pipe's own "limit to 30fps
+including its logic" fix - gates input reads, physics, animation, and
+redraw together (not a movement-only/redraw-stays-60fps split, unlike
+Trick/Invaders/Pinball/Bert's own treatment - "including its logic" per
+the same reasoning Tiny Pipe's own fix used). Every existing wait-frame
+constant in the file (`bikWaitFrames`, the note-sequencer's own
+`60.0`-based timing) was deliberately left unrescaled, matching this
+project's own standing "one divisor, no dual bookkeeping" practice -
+they simply now take twice as long in real time, which is the intended
+effect of halving the tick rate.
+
+Verified via Puppeteer (accounting for the now-doubled real-time
+duration of `BIK_STATE_LEVEL_INTRO_WAIT`'s own `bikWaitFrames=120` wait,
+which an under-slept first test attempt caught mid-wait, looking like a
+stuck screen before the wait was given enough real time to finish - not
+a bug, just the test's own sleep durations needing to account for the
+new slower pace) and then directly by the user's own play-test, who
+confirmed the result felt right. Ported to the SDL sibling project
+(`Tinyjoypad_SDL`) identically once confirmed, same session, same shared
+file - both `sdl3`/`sdl2` rebuilt clean.
+
+## Real persistent high-score saving, restored via a fake `eeprom.h` shim backed by Vircon32's memory card
+
+Every port in this project had dropped its own upstream game's real
+EEPROM-backed high-score persistence, tracking scores in-memory for the
+cartridge session only - `obonoCoreShim.h`'s own `loadRecord`/
+`storeRecord` had sat as an unwired no-op stub since NumberPlace shipped,
+and nearly every other game's own header comment repeated some variant of
+"EEPROM high-score persistence dropped (session-only)". Restored for real
+on direct user request, backed by Vircon32's actual memory card
+(`card_read_data`/`card_write_data`/`card_is_connected`, declared in
+`memcard.h`) via a new compatibility shim, `src/eepromShim.h`/`.c` - a
+"fake eeprom.h" reproducing AVR-libc's own primitive API
+(`eeprom_read_byte`/`eeprom_write_byte`/`eeprom_update_byte`/
+`eeprom_read_word`/`eeprom_write_word`/`eeprom_read_dword`/
+`eeprom_write_dword`/`eeprom_read_block`/`eeprom_write_block`/
+`eeprom_busy_wait`) per direct user request to model it on Arduino's own
+`EEPROM.h` naming - this dialect has no `class`/method support at all
+(confirmed via an empty project-wide and SDK-wide search for `class`), so
+`EEPROM.read(x)`-style dot-call syntax couldn't be preserved literally;
+naming the shim after avr-libc's own underlying primitives instead (what
+Arduino's real `EEPROM.h` is itself built on) meant raw-avr-libc call
+sites port with zero renaming, and Arduino-style call sites need only a
+mechanical rename (`EEPROM.read(x)` -> `eeprom_read_byte(x)`, etc).
+
+**Researched first via a dedicated Explore agent** before writing any
+code, cataloging every already-shipped game's real upstream EEPROM usage
+(address, format, API style) against `more games/`'s own source - this
+surfaced two real, useful negative results before any wiring began:
+NumberPlace/2048/HollowSeeker's shared Obono `loadRecord`/`storeRecord`
+exists upstream but was **never actually called** by any of the three
+games' own source (dead API, confirmed nothing to restore), and TinyMinez
+has **zero** real EEPROM references at all (the only "eeprom" hits are in
+`SerialHexTools.cpp`, a serial-debug dump tool explicitly excluded from
+real ATtiny85 builds via `#if !defined(__AVR_ATtiny85__)`). This left 15
+real candidates, catalogued with their exact upstream address/format
+before any porting began.
+
+**Looked up by each game's own menu title, not its registration index**
+(per direct user request) - so a future reordering of `menuGameList.c`'s
+own `addGame()` calls can never silently swap two games' save data the
+way indexing by raw index would risk. Modeled on the sibling
+`crisp-game-lib-portable_vircon32` project's own single-game save
+discipline (a fixed 20-word `game_signature` identifying "this card was
+written by this program", followed immediately by the real save data,
+with a magic+checksum guarding against a torn write) - extended here to
+a **per-game** open-addressing hash table instead of one single save
+blob, since this cartridge holds many games, not one:
+
+- `struct EepromSlot { int[24] nameTag; int magic; int checksum; int[512] data; }`
+  - one word per conceptual AVR EEPROM byte address (0-511), matching
+    `avrCompat.h`'s own project-wide choice to widen every `uint8_t` to a
+    plain `int` rather than pack bytes - the original AVR hi-byte/lo-byte
+    splitting each upstream game's own multi-byte read/write performed is
+    a hardware artifact, not something worth preserving bit-for-bit; only
+    the *behavior* (does the value survive a reboot) needs to match, the
+    same "preserve behavior, not implementation quirks" precedent already
+    established for the byte-truncation/shift-wraparound/signed-sentinel
+    bug family.
+  - `nameTag` sized 24 words at the time this shim was first built -
+    comfortably over the longest real menu title then (19 characters,
+    "WREN ROLLERCOASTER", confirmed via a full listing of every
+    `addGame()` call). **Bumped to 32, later in the session, after a
+    direct user question** ("the title of gilbert in the download is not
+    too long for our matching in save data?") caught a real, if not-yet-
+    triggered, latent bug: "Gilbert in the Downland" (23 characters) is
+    exactly 24 words including its null terminator - `strcpy()` in
+    `eepromResetCurrentSlotToFresh()` has no length bound of its own, so
+    that title exactly filled `nameTag[24]` with genuinely zero spare
+    capacity, one character away from silently overflowing into the very
+    next struct field (`magic`). Not yet an active bug (it fit, exactly),
+    but any future title even one character longer would have corrupted
+    its own slot's `magic` word on first selection - fixed proactively by
+    widening `EEPROM_TAG_WORDS` to 32 (8 words of real margin over the
+    current longest title) rather than waiting for an actual overflow to
+    manifest. This changes the on-card slot layout size
+    (`EEPROM_SLOT_WORDS` derives from it), so any high scores saved to a
+    real/virtual card under the old 24-word layout land at different
+    offsets under the new one and read back as "no matching slot" (a
+    fresh, zeroed high score) rather than being corrupted - an acceptable,
+    one-time reset given this project's own dev-time card data, not
+    something worth writing migration code for.
+- Card layout: word 0-19 is a fixed project-wide `game_signature`
+  (`"TINYJOYPADVIRCON01"`, distinct text from cglp's own signature so the
+  same physical card is never confused between the two projects if ever
+  shared), word 20 onward is a flat `MAX_GAMES`(64)-length table of
+  `struct EepromSlot`.
+- `eepromSelectGame( int* title )` (called automatically once, by
+  `portVircon32.c`'s own dispatch loop, right before a newly-chosen
+  game's `init()` runs - not something any game calls itself) computes a
+  simple polynomial hash of the title mod `MAX_GAMES` as a starting probe
+  slot, then linearly probes forward (wrapping) until it finds either a
+  slot whose own stored `nameTag` already matches this exact title (reuse
+  it, verifying its own checksum before trusting it) or a genuinely empty
+  slot (claim it fresh). Open addressing guarantees zero collisions
+  between any two distinct titles as long as the table isn't completely
+  full - trivially true with 64 slots and well under 64 real games using
+  this shim.
+- Every write updates the in-RAM slot copy, recomputes its checksum (a
+  plain running sum over `data[]`, matching cglp's own `calcSaveChecksum()`
+  shape), and writes through immediately (just the one changed word plus
+  the checksum word, not the whole 538-word slot) - matching real
+  EEPROM's own "writes are immediate and durable" semantic, with no
+  separate flush step to forget.
+
+**A real, easy-to-miss correctness detail, caught by re-reading the
+actual upstream call sites rather than assumed**: fresh/never-written
+cells default to **255 (0xFF), not 0** - matching real AVR EEPROM's own
+actual factory-erased state. This matters because multiple upstream
+games explicitly check for a literal 255 as their own "never written"
+sentinel (attiny85-flappy-bird/Pipe Bird's own `if (high_score == 255)
+high_score = 0;`, ATtiny Tetromino's own `if (top == 255) ...`) -
+defaulting to 0 instead would have silently changed what those checks
+detect. A related, broader issue found while wiring the "simple 2-byte
+score" games (9 of the 15): a virgin *pair* of 0xFF cells combines to a
+real `65535` via `eeprom_read_word()` - upstream itself has no guard
+against this for most of these games (only Pipe Bird/ATtiny Tetromino
+happened to check), but leaving it unguarded would make a game's first-
+ever session unable to ever register a new high score (no real score
+reaches 65535) - a genuine regression, not faithful behavior. **Fixed**
+by adding an explicit `if( xxxTop == 65535 ) xxxTop = 0;` guard at every
+one of the 9 affected games' own load site, a deliberate, documented
+deviation from a literal port rather than an oversight.
+
+**Per-game wiring, phased** (proposed and approved via a plan-mode
+review before any code was written, given the scope): proved the shim on
+3 representative upstream shapes first - `gamePipeBird.c` (raw avr-libc,
+a single byte, the simplest case), `gameFrogger.c` (Arduino `EEPROM.h`,
+a 2-byte big-endian score - the shape shared by 8 more games), and
+`gameTinyTris.c` (upstream's own 4-slot checksummed backup scheme, the
+most complex case) - then rolled out to the remaining 12: Space Attack,
+Falling Blocks, Breakout, Stacker (addr 2/3, not 0/1 - shares
+`UFO_Stacker_Attiny`'s own combined-cartridge EEPROM layout with UFO's
+own addr 0/1), UFO, Wren Rollercoaster (also restored its own "hold fire
+2s + left/right" high-score-reset gesture's real EEPROM write, not just
+the in-memory reset it already had), Astro Barrier and ATtiny Snake
+(both `EEPROM.get`/`.put(0, int)` - functionally the same 2-byte value,
+ported through the same `eeprom_read_word`/`eeprom_write_word` helpers),
+Blocks Gold (score only - its own separate persisted RNG seed at `0x03`
+was deliberately left out, not a high score and out of this pass's
+scope), ATtiny Tetromino (its own genuinely different addr-4-is-low/
+addr-12-is-high encoding with a real `/10` scale factor - ported via
+direct `eeprom_read_byte`/`eeprom_update_byte` calls matching upstream's
+exact formula rather than forced through the generic word helper), and
+Tiny Invaders (upstream's own 6-byte `{score,name[3],crcFix}` struct at
+addr 128 - ported as a plain 2-byte score only, since the 3-letter
+initials/name-entry screen that struct's other fields existed for is
+already dropped from this port; the save now fires at the same "NEW
+HISCORE!" banner trigger this port already had, rather than upstream's
+own now-absent name-entry-finished point).
+
+**Bat Bonanza deliberately excluded** - its own upstream EEPROM usage is
+3 settings bytes (mute/difficulty/gameMode), not a score; asked the user
+directly whether to restore these too, and per their answer this pass is
+scoped to high scores only, so Bat Bonanza has nothing to wire.
+
+**Tiny DDug's own `Tiny_DDug.ino` and several other Daniel-C-lineage
+games were not part of this pass at all** - the 15-game candidate list
+above is exhaustive for real upstream EEPROM usage among already-shipped
+games (confirmed via the same cataloging pass), not a partial sample.
+
+Verified in stages: the core infrastructure was smoke-tested first
+(NumberPlace still launches correctly after the new dispatch-loop
+`eepromSelectGame()` hook), then each Phase-A game individually. The one
+thing that couldn't be verified by launching/playing alone -  genuine
+persistence across a real reboot, not just an in-session global surviving
+- was proven with a real two-build test: build 1 temporarily force-wrote
+a known value (111) into Pipe Bird's own slot via a one-line debug
+addition to its `init()`, deployed and launched once (write confirmed via
+screenshot); the temporary line was then removed, build 2 deployed, and
+a **fresh Puppeteer browser instance reusing the same persistent
+`userDataDir`** (so the WebGL harness's own IndexedDB-backed virtual
+memory card - confirmed already built into `MainWeb.cpp`, one card per
+cartridge, auto-created/loaded per game, periodically flushed to
+IndexedDB - survives the reload the same way a real cartridge reinsertion
+would) launched Pipe Bird with zero flap input, reaching its own
+GAME OVER screen within under a second and showing "HIGH 111" - proving
+the value survived a completely fresh WASM/JS instance with no in-memory
+state carried over. A follow-up test in the same reused profile confirmed
+**slot isolation**: launching Frogger (a different game, never before
+selected in that session) showed no trace of Pipe Bird's own 111, and a
+separate fresh-profile test launching Tiny Tris for the first time ever
+on a brand-new card showed a clean `LINES 000`/`SCORE 000000`/`LEVEL 00`
+state - both the "claim a fresh empty slot" and "reuse an existing
+tagged slot" code paths in `eepromSelectGame()` exercised and confirmed
+correct. The remaining Phase-B games were verified via a lighter launch-
+only smoke pass (6 of the 9 spot-checked directly: Astro Barrier, ATtiny
+Snake, ATtiny Tetromino, Blocks Gold, Breakout, plus Bat Bonanza as an
+unmodified control to confirm no dispatch-loop-level regression) -
+each one's own new load-on-init call is the only genuinely new risk
+Phase B introduces beyond the already-proven Phase-A mechanism, and none
+crashed or rendered incorrectly.
+
+**A follow-up audit found two more real gaps and one deliberate
+extension, all from direct user questions rather than a proactive re-
+check**: after fixing all 15 games' own header comments to stop claiming
+"EEPROM dropped" (a genuine miss in the pass above - the actual code was
+restored, but each file's own descriptive comment block still said
+otherwise until the user asked directly), the user asked whether *other*
+already-shipped games display an in-game high score without ever having
+saved it - prompting a project-wide grep across every `src/games/*.c` for
+"HIGH SCORE"/`highScore`/`topScore`-style variable names, not just the
+original 18-game candidate list. This surfaced:
+- **Oroboros and Run Dude Run** - both genuinely missed by the original
+  audit, not because their upstream lacks real EEPROM (it has the exact
+  same 2-byte big-endian shape as most other games in this pass), but
+  because the original project-wide grep across `more games/` was
+  filtered down to a curated candidate list by matching folder names
+  against already-known game titles, and neither of these two games'
+  own AttinyArcade sketch folder names
+  (`attiny_oroboros_vcc_gnd_scl_sda`/`attiny_run_vcc_gnd_scl_sda`)
+  obviously mapped to "Oroboros"/"Run Dude Run" at a glance - a real
+  process gap (the original raw grep output *did* include these files,
+  they just got dropped during manual curation), not a fundamentally
+  different kind of miss than the rest of this pass. Restored the exact
+  same way as every other "simple 2-byte score" game. Run Dude Run's own
+  upstream also has a real `if(topScore<0){...reset to 0...}` guard -
+  worth noting *why* it's real there but not needed verbatim here: on
+  real AVR hardware, a virgin `(0xFF,0xFF)` pair composes into a
+  **negative** 16-bit `int` (0xFF00 has its own sign bit set), not a
+  large positive one - Vircon32's wider 32-bit `int` arithmetic instead
+  composes the same virgin bytes into a large *positive* 65535, so the
+  equivalent guard here checks for that value instead, matching every
+  other game in this pass rather than porting a check that can never
+  actually trigger on this platform.
+- **Tiny Bert** - a genuinely different case: it has real in-memory
+  high-score tracking (`bertHighScore()`/`bertRecupeHighScore()`,
+  comparing digit-by-digit against a tracked best) and displays it on
+  its own title screen, but its *upstream* `.ino` has zero EEPROM
+  references anywhere - confirmed by direct inspection, not assumed -
+  meaning the real ATtiny85 cartridge never persisted this either. Not a
+  restoration, but a deliberate, user-approved *extension* beyond what
+  upstream itself ever did. Stored as one combined 5-digit value via
+  `eeprom_read_dword()`/`eeprom_write_dword()` rather than the word
+  helpers most other games use, since a genuine 5-digit score (up to
+  99999) can exceed a 2-byte word's own 65535 ceiling - the virgin-slot
+  sentinel here is a clean `-1` (all 4 bytes still 0xFF composes to a
+  real all-ones 32-bit value) rather than the word-level games' own
+  65535 check. `bertHighScore()`'s own comparison formula only checks 4
+  of the 5 tracked digits (the ten-thousands digit, `bertHD4`, is
+  tracked and displayed but never actually compared) - a pre-existing
+  upstream quirk unrelated to persistence, left exactly as-is rather
+  than "fixed" while adding unrelated new functionality.
+
+Verified via a light Puppeteer launch pass (all three games: Oroboros,
+Run Dude Run, Tiny Bert) - no crashes, and Tiny Bert's own title screen
+directly confirmed a fresh slot correctly reads back as "00000
+HIGHSCORE" rather than garbage, proving the dword-level virgin-sentinel
+guard works the same way the word-level one already did.
+
+**Two real ATtiny Tetromino scoring bugs found via direct user reports,
+both unrelated to the EEPROM mechanism itself - genuine in-memory logic
+gaps that predated it, only now noticed because the user was actually
+comparing the displayed high score against gameplay.** Diagnosed via
+code inspection only, per explicit user instruction not to test mid-
+investigation. (1) The high-score check
+(`if(trmoScore>trmoHighScore) trmoHighScore=trmoScore;`) was gated
+behind a `trmoMadeLine` flag, so the high score only ever updated on a
+line clear - **fixed** by removing the gate entirely (an unconditional
+check right after the score-increment block in
+`trmoLockPieceAndAdvance()`) and deleting the now-dead `trmoMadeLine`
+variable and all its set/reset sites. (2) A *second*, separate scoring
+path existed - `trmoScore += 1;` inside `trmoUpdatePlaying()`, fired
+every tick while the drop button is held - completely bypassing the
+high-score check above, so drop-bonus points could exceed the high
+score with nothing noticing. **Fixed** by centralizing all score
+mutation through one new helper, `trmoAddScore(int amount)`
+(`trmoScore += amount; if(trmoScore>trmoHighScore) trmoHighScore=trmoScore;`),
+with every scoring site (all 4 line-clear bonuses and the drop-hold
+bonus) routed through it instead of mutating `trmoScore` directly -
+confirmed via a final grep that no direct `trmoScore` mutation remains
+outside the helper (except the legitimate `trmoScore=0;` reset in
+`trmoInitGame()`).
+
+**A genuine "loads and saves correctly but never displays" gap found in
+Tiny Tris**, from a direct user question about where/when the saved
+high score is shown. `trisRecupeHighscore()` (load) and
+`trisCheckNewRecord()` (save) both worked correctly, but a full-file
+grep confirmed `trisHighScore`/`trisHighLevel`/`trisHighLines` had zero
+render call sites anywhere - loaded and kept up to date, never actually
+drawn. Tracing upstream's own `recupe_HIGHSCORE_TTRIS()` explained why
+this port's separate-variable design introduced the gap where upstream
+never had one: upstream doesn't have a separate high-score variable set
+at all - it loads the persisted backup directly into the *same* live
+`Scores_TTRIS`/`Level_TTRIS`/`Nb_of_line_F_TTRIS` variables its own
+in-game HUD already renders (via `recupe_SCORES_TTRIS` etc, already
+called unconditionally from the attract screen's own `Flip_intro_TTRIS`),
+so on real hardware the attract screen visibly shows the last saved best
+while idle, only resetting to 0 once a real game actually starts.
+**Fixed** by mirroring the loaded `trisHighScore`/`trisHighLevel`/
+`trisHighLines` into `trisScores`/`trisLevel`/`trisNbOfLineF` at the end
+of `trisBeginAttract()` (right after `trisRecupeHighscore()`, before
+`trisConvertNbOfLine()` so the digit-conversion table is built from the
+now-correct value) - the already-existing `trisFlipIntro()` render calls
+pick this up for free, with no new render code needed.
+`trisResetScore()` (called on Fire-press before a real game begins)
+already correctly zeroed all three, matching upstream's own reset
+timing. Verified via a fresh-profile screenshot showing the correct
+`LINES 000`/`SCORE 000000`/`LEVEL 00` baseline and a clean rebuild; per
+a direct user instruction to stop testing mid-verification, a full
+save-then-reload round-trip screenshot was not captured for this
+specific fix (unlike the general shim's own earlier two-build Pipe Bird
+proof above) - low risk, since it reuses the exact same
+`trisRecupeHighscore()`/`trisBeginAttract()` call path already proven
+correct by that earlier test, just adding a value copy with no new
+control flow.
+
+## Status (as of this session)
+
+Shipped and visually verified (WebGL emulator + a Puppeteer screenshot
+harness - see below): the shim architecture, the menu, and 60 full games
+(NumberPlace, Tiny Invaders, 2048, HollowSeeker, Tiny Pinball, Tiny
+Pacman, Tiny Bomber, Tiny Doc, Tiny Bert, Tiny Tris, Tiny Arkanoid, Tiny
+Trick, Tiny Minez, Tiny Missile, Tiny Bike, Tiny Arena, Tiny Gilbert,
+Tiny Pipe, Tiny Morpion, Tiny Plaque, Tiny SQuest, Tiny DDug, Tiny
+Lander, Wren Rollercoaster, Frogger, Bat Bonanza, Stacker, UFO, Tiny
+Dungeon, Oroboros, Run Dude Run, Four in a Row, Dino Game, SnakeGame85,
+Jump Slime, TinyRoG, TinY Fi, Breakout, Space Attack, Falling Blocks,
+Tiny Mania, Blocks Gold, Astro Barrier, ATtiny Snake, Meteor Storm,
+Flappy Bird, Tiny Bulls And Cows, ATtiny Tetromino, Laser Pong, Pipe
+Bird, Nohzdyve, Gilbert in the Downland, Ardumania, Road Rush, DFlight,
+MRunnr, Asteroid, Helicopter, Car Race, Tiny Blocks - Falling Blocks,
+Blocks Gold, and Tiny Blocks's own menu names all deliberately avoid
+naming the falling-block puzzle genre they're clones of, a registered
+trademark (see each one's own writeup below for the full naming
+rationale); Tiny
+Mania was staged from tinyjoypad.com itself mid-session after the user
+noticed it had just been released there, and Blocks Gold/Astro Barrier/
+ATtiny Snake/Meteor Storm are the four most recent additions, all found
+via the same direct user request to search more broadly for uncatalogued
+ATtiny85/TinyJoypad games (including non-English-language sites) and
+picked one at a time from that search's own staged 4-candidate batch -
+Meteor Storm was the last remaining candidate from that batch, needing
+more adaptation than the other three (see its own catalog entry above
+for why) but shipped last in the same batch rather than staying
+permanently deferred - see each shipped one's own writeup below). Every
+game from the project's original scope
+shipped with Tiny Dungeon (see its own
+writeup below for what's still not independently re-verified about it
+specifically) - Oroboros, Run Dude Run, Four in a Row, and Dino Game
+were this project's first four additions *beyond* that original scope,
+found via a follow-up GitHub/web search for TinyJoypad-compatible games
+not already catalogued (see "Beyond the original scope" below for the
+full survey and what else it turned up) - Dino Game was the last known
+candidate from *that* survey, but a fifth beyond-scope addition,
+SnakeGame85, was found afterward via a direct link the user supplied
+(github.com/terezaza/SnakeGame85, not part of the earlier systematic
+search) and shipped the same session - see its own writeup below. A
+sixth addition, Jump Slime, came from a completely different discovery
+channel again: the user placed a `more games/sample/` folder directly
+into the repo containing 3 original AI-assisted ATtiny85 games by a
+Japanese creator (近藤さんちの研究室 / "kondolab"), with a `source.txt`
+listing the author's note.com articles - fetched via WebFetch to
+identify each game's real title/description/source link (see `more
+games/`'s own catalog entry below for the full triage of all 3). Jump
+Slime was picked as the simplest/lowest-risk of the three to port first;
+TinyRoG (the roguelike, second of the three) followed in the same
+session, and TinY Fi (the fighting game, third and last of the three)
+followed in a later session - see its own writeup below. The `more
+games/sample/` batch, and with it that particular beyond-scope backlog,
+closed out there - but a later direct user request to re-check `more
+games/gametiny/` (this project's *other* beyond-scope source, previously
+believed fully triaged) against actual source code rather than genre
+similarity turned up 3 more genuine, previously-missed games -
+SpaceAttack, the falling-block puzzle game credited in this project's own
+menu as "Falling Blocks", and Breakout (see that folder's own catalog
+entry above for the full re-verification). Breakout was ported first,
+Space Attack (a genuine Andy Jackson-family game, not a Tiny Invaders
+lookalike despite the shared genre) followed in the same session, and
+Falling Blocks (the last of the three) followed in a later session - see
+each game's own writeup below.
+
+- `src/machineDependent.h` + `src/portVircon32.c` - the `md_*` primitives
+  (video/input/audio) plus the atlas texture setup and the top-level
+  menu<->game dispatch loop.
+- `src/tinyJoypadShim.h/.c` - reproduces the Lorandil/phoenixbozo
+  `tinyJoypadUtils.h` API (`InitTinyJoypad`, `isXPressed`,
+  `PrepareDisplayRow`/`SendPixels`/etc, `Sound`) on top of `md_*`.
+- `src/obonoCoreShim.h/.c` - reproduces Obono's `TinyJoypadWorks` core API
+  (sprite/string compositing engine, button state, `playTone`/`playScore`)
+  on top of `md_*`.
+- `src/avrCompat.h` - the trick that made porting upstream `.ino`/`.cpp`
+  files tractable without line-by-line rewrites: `uint8_t`/`int8_t`/etc
+  alias to plain `int`, `PROGMEM`/`pgm_read_*`/`memcpy_P` become ordinary
+  flat-memory access. Combined with the fact that `sizeof`/`memcpy` both
+  count in words on Vircon32, most upstream array-sizing arithmetic (written
+  in bytes, for byte arrays) keeps working unmodified once the array becomes
+  word-sized elements - the units change together.
+- `src/games/gameNumberPlace.c` - NumberPlace (Obono, MIT). Low structural
+  risk - upstream was already mode/state-based, no blocking loops. Memory-
+  card persistence (high scores) deferred - `obonoCoreShim.h`'s
+  `loadRecord`/`storeRecord` are stubs for now.
+- `src/games/gameT2048.c` - t2048 (Obono, MIT). Easiest port yet - `core.h`
+  is nearly byte-identical to NumberPlace's own (see `#define SPECIAL
+  DIRECT` alias at the top of the file), already mode/state-based
+  upstream, no blocking loops. Surfaced one real, generalizable bug in the
+  shared shim: `obonoCoreShim.c`'s `SPRITES` capacity was hardcoded to 8
+  (NumberPlace only ever needed 5), but t2048's 4x4 board calls
+  `setSprite()` with indices up to 15 - `setSprite`/`moveSprite`/
+  `clearSprite` do no bounds checking, so indices 8+ silently overran into
+  the adjacent `string[]` array, corrupting UI label positions and
+  glitching whichever board tiles were far enough out-of-bounds (the
+  bottom rows). Fixed by raising `SPRITES` to 20 - a shim-level fix, so it
+  protects any future game with a bigger sprite count too, the same way
+  the earlier byte-masking fix did for `md_drawColumn()`.
+- `src/games/gameTinyInvaders.c` - Tiny Invaders v4.2 (credited in the menu
+  as "DANIEL C / SVEN B" - the `.ino`'s own header says "Programmer: Daniel
+  C 2018-2020, Enhancements: Sven B 2021" for this specific v4.2 release;
+  earlier notes in this file said "Lorandil" for this game, which was
+  imprecise - `Lorandil@gmx.de` is Sven B's own listed contact email
+  (confirmed against TinyMinez's and TinyDungeon's headers, both of which
+  say "\[Programmer/Developer\]: Sven B" with that same contact address),
+  so "Lorandil" appears to be Sven B's GitHub/online handle rather than a
+  separate third person - **GPLv3**, see Licensing below. The bigger lift:
+  upstream's `loop()` is one
+  never-returning function built from nested `while(1)` + `goto`
+  (`NEWGAME`/`NEWLEVEL`/`BYPASS2`/`Bypass`/`RestartLevel` labels) plus
+  several `_delay_ms()` calls, since it assumed it owned the whole CPU for
+  the entire play session. Rewritten as an explicit frame-stepped state
+  machine (`enum` + `tinvWaitFrames` countdown replacing every
+  `_delay_ms()`) - see the file's own header comment for the full mapping.
+  High-score EEPROM persistence and the 3-letter name-entry screen are
+  dropped for now (score is tracked in-memory for the cartridge session);
+  "NEW HIGH SCORE" just shows a banner instead. Several more bugs found
+  later the same session: the `MonsterGrid` 0xFF-vs-`-1` signed-sentinel
+  mismatch (corrupted static on the "LEVEL N" flash screen), the first
+  playthrough showing "LEVEL 0" instead of "LEVEL 1", and `tinvLive`
+  likewise starting at 0 instead of 3 on a true first playthrough (see "A
+  third real bug, same family" above - same root cause as the level number,
+  `gameTinyInvaders_init()` not fully replicating upstream's `NEWGAME:`
+  reset block); a control-flow bug where clearing a level froze the game
+  permanently right after the correct "LEVEL N" flash (see "A fourth bug"
+  above) - `tinvOnWaitComplete()` was clobbering its own callee's freshly-
+  set wait action back to NONE; and a stale "NEW HISCORE!" value that could
+  permanently lag behind the true score after certain deaths (see "A fifth
+  bug" above) - `tinvHighScore` now syncs immediately in `tinvAddScore()`
+  instead of relying solely on a once-per-frame poll that could be starved.
+- `src/games/gameHollowSeeker.c` - HollowSeeker (Obono, MIT). Already mode/
+  state-based upstream (LOGO/TITLE/GAME with STATE_START/PLAYING/OVER inside
+  GAME), no blocking loops to convert. Its `core.cpp` needed a WIDER font
+  range ('!' through '_') than NumberPlace/t2048's ('-' through 'Z') -
+  `obonoCoreShim.c`'s shared `imgFont[]` table was widened to the superset
+  (byte-identical in the overlap) rather than duplicating a second table,
+  same "fix it once in the shim" approach as the SPRITES capacity bump.
+  Surfaced two real, generalizable bugs (see the section above): the
+  `rand()`-range mismatch (fixed via the new shared `arand()` helper, also
+  applied retroactively to the other three games' own random helpers) and
+  the shift-count-wraparound bug in its cave-wall rendering (fixed with
+  explicit clamping in `hsDrawGame()`). Also needed `hsCavePhase` (a lap
+  counter) to explicitly wrap at 256 with `& 0xFF` - upstream relied on this
+  being a `uint8_t`'s implicit overflow to run its once-per-lap death check
+  and its "final 12 frames of the lap" warning tone; without the explicit
+  wrap the counter just grew forever, so the death check only ever fired on
+  the very first frame (the player became unkillable) and the warning tone
+  condition went permanently true forever the first time it crossed 244 (an
+  endless hum) - both symptoms the user found through actual play.
+- `src/games/gameTinyPinball.c` - Tiny Pinball (Daniel C, GPLv3). First
+  Tier-2 (tinyJoypadShim-lineage, per the porting-priority memory) game
+  ported. Straightforward structurally (upstream's `loop()` is just a
+  `NEWGAME:`/`start:` goto-chain around two `while(1)`s, the same shape
+  Tiny Invaders already established a conversion pattern for) - the real
+  work was figuring out upstream's button reads, which bypass
+  `isXPressed()`-style helpers entirely and poll `analogRead(A3)`/
+  `digitalRead(1)` directly; cross-referencing the exact thresholds against
+  Tiny Invaders' own driver source (and this game's own `ELECTROLIB.h`,
+  which confirms A3 is the up/down axis) resolved the mapping without
+  needing any new shim primitives. Remapped controls to independent
+  left/right/down d-pad inputs (left flipper/right flipper/launch spring)
+  instead of upstream's up-only-left-flipper and one shared down-or-fire
+  input serving double duty for both the right flipper and charging the
+  launch spring - reads far more naturally on a real gamepad. Also dropped
+  Tiny_Flip2's partial-screen-band redraw optimization (upstream skips
+  `i2c_write` calls outside the ball's immediate row-band and relies on the
+  physical SSD1306's VRAM *persisting* whatever was drawn there last frame -
+  a real hardware behavior this project's always-clear-then-redraw model via
+  `md_beginFrame()` can't replicate; skipping those columns here would make
+  the playfield outside the ball flash black every frame instead of staying
+  visible) - always redraws the full 8 pages instead, trivial against the
+  budget. One real bug found via actual play (reported by the user: "start
+  with 0 balls... then 4 balls of a sudden"): `tpBeginPlaying()` (reached
+  once, from the READY screen, before the very first ball) was missing the
+  `totalBall--` decrement upstream's `start:` label does unconditionally
+  before every ball including the first - left `tpTotalBall` at its initial
+  5, one past the 0-4 range the ball-count sprite arrays index into, so the
+  first ball rendered a garbage out-of-bounds frame instead of "4 balls
+  left" (only self-corrected once losing that first ball hit the *other*,
+  correct decrement already present in the "ball lost, balls remain" path).
+- `src/games/gameTinyPacman.c` - Tiny Pacman (Daniel C, GPLv3). Second
+  Tier-2 game. Button mapping was ordinary this time (no remap needed) -
+  cross-referencing upstream's raw `analogRead(A0)`/`analogRead(A3)`/
+  `digitalRead(1)` reads against Tiny Invaders' driver constants confirmed
+  they land exactly on `isLeftPressed()`/`isRightPressed()` (A0) and
+  `isUpPressed()`/`isDownPressed()` (A3) - upstream's own `DirectionV`/
+  `DirectionH` field names are swapped from what they actually control
+  (`DirectionV` steps x, `DirectionH` steps y), just an upstream naming
+  quirk, not a porting wrinkle. Preserved upstream's "sticky" direction
+  input exactly (once set, `DirectionV`/`DirectionH` are never reset to
+  their "no input" sentinel of 2 by releasing a button, only by pressing
+  the opposite direction) - that's what makes Pac-Man/ghosts keep gliding
+  in their last direction the way the original arcade game does. Dropped
+  upstream's own 44ms-per-tick `FPS_Control` real-time frame limiter and
+  its "only redraw every *other* logic tick" split (`Frame%2==0` gating
+  `Tiny_Flip()` itself) - both were AVR performance compromises (bit-
+  banging a redraw over i2c is slow; capping the loop rate kept gameplay
+  sane despite that) this project's fast, always-clear-then-redraw model
+  doesn't need - runs the full tick (movement + redraw) once every real
+  60fps frame instead, so movement is somewhat brisker than upstream's
+  blended ~45fps logic-tick rate. `random()%2` (a ghost's post-wall-bump
+  direction pick) switched to the shared `arand(2)` helper, same reasoning
+  as HollowSeeker's fix. No bugs found this time - played correctly
+  (Pac-Man, ghosts, dots, power pellets, lives, attract-mode Pac-Man
+  suppression) on the first build.
+- `src/games/gameTinyBomber.c` - Tiny Bomber (Daniel C, GPLv3). Third
+  Tier-2 game (a Bomberman clone) - skipped **Tiny DDug** for now despite
+  its lower goto count, since it's built around a C++ class (`ClassTDDUG.h`)
+  rather than a plain `.ino`, the same complexity that made TinyDungeon a
+  deferred Tier-3 game (goto/while(1) counts alone don't capture that kind
+  of cost - worth re-triaging Tiny DDug properly before assuming it's
+  next). Bomber's own button mapping and structure closely mirror
+  gameTinyPacman.c (same author, same analog-axis-plus-discrete-pin
+  pattern, same `DirectionV`/`DirectionH` naming swap) - but unlike Pacman,
+  direction fields *do* reset to their "stopped" sentinel here, gated on
+  reaching the next grid cell (`x%8==0`/`Decalagey==0`) rather than on
+  button release, preserved exactly since that's what gives movement its
+  clean grid-snapping feel. Upstream's `StartGame()` busy-waits for the
+  button to be *released* before returning (so the same press that
+  confirms "start" can't also instantly place a bomb) - exactly what
+  `md_armInputFireGate()` (built for gameTinyInvaders.c) already does, used
+  here instead of a real blocking wait. Same AVR-performance-compromise
+  drops as Pacman (44ms frame limiter, alternate-tick redraw split) and the
+  same `random()%2` to `arand(2)` fix. Verified the full gameplay loop by
+  actual play: movement, destructible checkerboard blocks vs. solid walls,
+  bomb placement/fuse/explosion, and - confirming self-damage works
+  correctly, a core Bomberman mechanic - the player's own bomb blast
+  correctly killed them and decremented lives (3 to 2) with a clean
+  respawn at the level start position.
+  **One real bug found via later user playtesting**: reproducible with
+  "move right, then left, then hold up" - the player could move up
+  about one grid row then get permanently stuck, unable to go further,
+  even though nothing was visually blocking the path. Root cause: a
+  single transcribed byte was missing from the 1024-entry `bomBack[]`
+  wall-collision bitmap (`spritebank.h`'s `back[]`) - a plain manual-
+  transcription slip, not a Vircon32-dialect issue like the earlier
+  byte-truncation/shift-count bugs. One dropped `0x00` at array index
+  655 (row 5, column 15) shifted every following byte in the array by
+  one position, so from that row down the collision data the game
+  checked was actually the *next* column's data - producing false
+  "wall here" collisions at effectively-random-looking spots. Found by
+  writing a Node script to re-extract both the ported `int[1024]
+  bomBack` array and upstream `spritebank.h`'s `back[] PROGMEM` array
+  and diff them value-by-value (rather than trusting eyeballed hex, or
+  the initial debug-marker/HUD-overlay approach that only proved the
+  bug was real but not *why*) - the same technique is worth reaching
+  for immediately on any future "collision looks wrong in one specific
+  area but the logic reads correctly" report, since manual transcription
+  of large data tables is exactly the kind of mistake static code review
+  won't catch. All of Bomber's other data tables (`bomBlocDetect`,
+  `bomLevelData`, `bomBackBlitz`, `bomCaracters`, `bomMusic`, `bomFire`,
+  `bomBomb`) were re-diffed the same way after this find and confirmed
+  byte-for-byte correct - this was an isolated transcription slip, not a
+  systemic issue. Fixed by inserting the missing byte; rebuilt and
+  re-verified the exact repro sequence in the WebGL emulator, confirming
+  the player can now traverse the full column to the top row.
+  **A second, more serious bug reported later**: a hard crash ("ERROR:
+  INVALID MEMORY READ") reported on level 3, near a bomb exploding close
+  to the upper-right corner. Vircon32's compiler accepts a `-g` flag that
+  emits a debug-info file mapping each instruction address back to a
+  source line; feeding the crash screen's reported Instruction Pointer
+  into that mapping pointed directly at `bomRecupeBackToCompV()`'s
+  `bomBack[ sprite.y * 128 + maxV ]` / `bomBack[ (sprite.y + 1) * 128 +
+  maxV ]` reads - the vertical-movement (`DirectionV`, x-axis) sibling of
+  `bomRecupeBackToCompH()`, which already guarded every `bomBack` index
+  with `idx > 1023 || idx < 0` before reading. `bomRecupeBackToCompV()`
+  never got the equivalent guard (neither did upstream's own
+  `RecupeBacktoCompV` - the same unguarded read exists in the original
+  `.ino`, it just never crashes there since AVR has no memory protection
+  and silently returns garbage flash data instead). A sprite sitting at
+  the bottom row (`y == 7`, a completely normal, reachable position -
+  the player *starts* every level there) makes the `y + 1` lookup index
+  `1024 + maxV` - one full row past the 1024-entry array. In most cases
+  this silently reads into the next declared global (`bomBackBlitz`,
+  same size, right after it) and just returns wrong-but-valid data - which
+  is presumably why this had survived multiple earlier full playthroughs
+  unnoticed. Because `gameTinyBomber.c` is the *last* `#include` in
+  `main.c`, its own globals sit at the tail end of the whole cartridge's
+  13,445-word global segment - on level 3, apparently, the exact
+  combination of `sprite.y`/`maxV` finally pushed the read far enough
+  past `bomBackBlitz` too to hit genuinely unmapped memory and hard-crash
+  instead of just returning bad data. Fixed by adding the same bounds
+  guard `bomRecupeBackToCompH()` already had (routed through a new
+  `bomRecupeBackToCompVIdx()` helper). While in there, also fixed a
+  sibling latent bug in `bomBoolWrite0()` (the destructible-block bitmap
+  writer): unlike `bomBoolRead()`, which already rejected `numero > 105`,
+  `bomBoolWrite0()` had no upper bound at all, so a bomb exploding at the
+  bottom row (`bomDestroyBloc()`'s `y+1` case, reachable since `BOMBXY[1]`
+  can hit 8 when a bomb is placed at max `Decalagey`) could write a
+  couple words past the 14-entry `bomBlocBombMem` array into the next
+  global (`bomMusic`) - same "the sibling function has a guard, this one
+  doesn't" pattern, fixed the same way. Verified the fix with a 30+ second
+  soak test letting all 4 enemies bounce autonomously on both level 1 and
+  a temporarily-forced level 3 (enemies visibly reached the bottom-right
+  corner in both) with no crash, then reverted the temporary level-force
+  test hook. The `-g`/debug-info-address-to-source-line technique used
+  here is worth reusing directly for any future "ERROR: INVALID MEMORY
+  READ/WRITE" crash report, rather than guessing from a code read alone -
+  see `obj/main.vbin.debug` (generated via `assemble -g program`) for the
+  address-to-line mapping format.
+- `src/games/gameTinyDoc.c` - Tiny Doc (Daniel C, GPLv3). Fourth Tier-2 game,
+  picked next per the priority triage (lowest `goto` count remaining in the
+  Daniel-C family). A Dr. Mario-style falling-pill puzzle: two-cell "pills"
+  drop into an 8x10 grid, runs of 4+ same-colored cells (pill halves or
+  viruses) clear, and clearing every virus in the grid advances the level.
+  Same `FastTinyDriver.h`/ELECTROLIB.h button-read pattern as Pinball/Bomber
+  (no UP needed here - only left/right/soft-drop/rotate). Data tables
+  (`SpriteBank.h`) were extracted from upstream with a small Node script
+  rather than transcribed by hand, specifically to avoid a repeat of
+  Bomber's dropped-byte bug - all 11 arrays confirmed byte-for-byte via
+  the script's own count vs. a manual re-read of the source. The riskiest
+  structural piece: upstream's line-clear/gravity resolution
+  (`do { CheckCompletedLine_TD(); } while (DropPills_TD());`, plus
+  `ClearLine_TD()`'s own 6-frame clear-flash loop) is a genuinely
+  *blocking, multi-frame* cascade upstream (each iteration calls
+  `TinyFlip_TD()`+`FPS_Count_TD()` itself, looping until nothing more
+  matches or drops) - rewritten as an explicit `tdResolveState` sub-state
+  machine (SCAN -> CLEAR_ANIM -> DROP -> back to SCAN if anything moved,
+  else resume normal play) that advances exactly one step per real engine
+  frame instead of looping to completion inside a single frame, the same
+  "blocking loop -> explicit resumable state" treatment every other
+  tinyJoypadShim port here has needed, just applied to a genuine
+  match-cascade instead of a simple timer. Also had to catch, before ever
+  compiling: `DropPills_TD()` counts `for (uint8_t y = 8; y < 255; y--)`,
+  relying on `y` underflowing 0 -> 255 as a loop-termination trick - since
+  `uint8_t` aliases to a real (non-wrapping) `int` here, that condition
+  would be true forever, so rewritten as a plain signed
+  `for (int y = 8; y >= 0; y--)` - the same AVR-implicit-behavior class of
+  bug as the byte-truncation/shift-wraparound/signed-sentinel bugs found
+  earlier this project, just caught by inspection before it ever shipped
+  rather than by a bug report. Also rewrote GCC's `case N ... M:` case-
+  range extension (used twice upstream) as plain `if`/`else if` chains,
+  and avoided `switch` entirely, since neither is exercised anywhere else
+  in this project's ports and there was no reason to be the first to find
+  out whether the dialect supports them. Wrote the render loop
+  (`tdTinyFlip`) with the row/x-range gating lesson from this same
+  session's Tiny Invaders/Bomber CPU-load pass baked in from the start
+  (each of its 7 draw layers only ever applies to an already-known narrow
+  x/y sub-range - gated in the outer loop instead of calling every layer
+  unconditionally on all 1024 pixels/frame). Verified via actual play:
+  attract screen, pill movement/rotation/soft-drop, connected multi-cell
+  pieces dropping together, locking, game over, and the return-to-attract
+  flow, across two extended sessions with no crashes - did not
+  specifically force-verify the clear-*animation* frames firing (color
+  matches are random per-playthrough and none happened to line up during
+  testing), so that specific path is unconfirmed by direct observation,
+  though the logic was ported unchanged from upstream's own (line-by-line
+  equivalent) scan/clear code.
+  **Two bugs found shortly after shipping, both from not fully applying
+  this project's own established lessons to a new port:**
+  1. The user reported the right portion of the screen (background art,
+     the mascot, the level/virus-count panel) staying black except while
+     a pill was being "thrown" (`PILLMODE_TD==3`). Root cause: I'd ported
+     upstream's `TinyFlip_TD(PartialX_85_128, PartialY_4_8)` parameters
+     verbatim - upstream only redraws the left 85-of-128 columns (or the
+     top 4-of-8 rows) most of the time, and relies on the real SSD1306's
+     VRAM *persisting* whatever was drawn in the skipped columns/rows last
+     time - a real hardware behavior this engine's always-`clear_screen()`
+     -then-redraw model via `md_beginFrame()` can't replicate. This is the
+     **exact same class of bug already documented and fixed** in
+     `gameTinyPinball.c`'s own header comment (its `Tiny_Flip2` partial-
+     redraw optimization) - I simply didn't cross-check Tiny Doc's
+     `TinyFlip_TD` against that already-written lesson before porting it.
+     Fixed the same way Pinball was: always redraw the full 128x8 every
+     frame (`tdTinyFlip()` no longer takes width/height parameters at
+     all). A good example of why "grep this project's own CLAUDE.md for
+     the same shape of upstream optimization" is worth doing *before*
+     porting a new game's flip function, not after a user reports it.
+  2. Separately, the user asked whether Tiny Doc got the same CPU-load
+     optimization pass as Invaders/Bomber/Pacman, since it was also
+     reported hitting the ~100% ceiling. It had only gotten the *first*
+     technique (row/x-range gating, above) - not the deeper one:
+     `DrawTAB_TP`/`DrawNewPill_TD` were still scanning every relevant
+     *pixel* and re-deriving which grid cell/pill-half could overlap it
+     before calling `blitzSprite()`, the same O(pixels x objects) shape
+     Bomber/Pacman's sprite compositing had. Fixed with the same
+     restructuring: `tdCompositeTabIntoBuffer()`/
+     `tdCompositeNewPillIntoBuffer()` now walk the actual grid
+     cells/pill-halves once per page row and write only their up-to-4
+     occupied columns into a shared `tdSpritePageBuffer[128]`, instead of
+     scanning all ~273 (tab) / ~504 (pill) pixels and calling
+     `blitzSprite()` for each regardless of whether anything was there.
+     Re-verified rendering afterward (stacked columns of locked pills,
+     mixed pill/virus icons, rotation) with no regressions. No numeric
+     CPU% measurement exists for this build either (same caveat as the
+     Invaders/Bomber pass) - worth checking in real play.
+  **Still reported heavy, specifically "with many pills on screen"**: that
+  phrasing pointed straight at `tdCompositeTabIntoBuffer()`, since it's the
+  one layer whose cost scales with how many grid cells are filled (the
+  currently-falling pill and every other layer are cost-independent of
+  board fill). Found a real, if subtle, waste once looked at again: for
+  every locked cell, the loop called `tdBlitzSprite()` **twice** - once
+  for the pill-half sprite, once for the virus overlay via
+  `tdSwitchRecupVirus()` - but that function's own "not a virus" sentinel
+  (frame `1`) points at `tdVirus`'s frame 1, which is literally
+  `{0x00,0x00,0x00,0x00}` (checked directly in the data table) - meaning
+  the virus-layer blit was *guaranteed* to compute to 0 for every locked
+  pill-half cell, every time, and got called anyway. Since pill halves
+  only ever accumulate over a level while viruses only ever decrease,
+  this cost grows in exactly the direction the user described. Fixed by
+  checking the cell's type once (already extracted for the pill-frame
+  lookup) and skipping the virus-layer `tdBlitzSprite()` call entirely
+  unless the cell is actually a virus (type 1-3) - `tdSwitchRecupVirus()`
+  itself became dead code and was removed. Re-verified: locked-pill
+  rendering identical, virus cells still show their distinct overlay
+  texture, no regressions. Same class of finding as the last two rounds -
+  a render-cost lever that isn't about *whether* a layer is gated by
+  position, but whether it's doing work whose result is already knowable
+  as a constant in the common case.
+  **Still reported slow specifically "when the grid is almost full"**:
+  a different lever again - not a per-pixel gating gap, and not a
+  provably-constant branch, but recomputing an *entire* layer from
+  scratch every single frame even on frames where nothing about it had
+  actually changed. `tdCompositeTabIntoBuffer()` (the locked-grid
+  composite) was still being fully rebuilt - every filled cell, every
+  frame - regardless of whether the grid had been touched since the
+  previous frame. In practice the grid only actually changes when a pill
+  locks, a clear/drop cascade is running, or a level resets; on every
+  *other* frame (a pill just falling/moving under player control, which
+  is most frames) the entire expensive recompute was wasted work
+  reproducing an identical result. Added a `tdTabDirty` flag (default
+  `true`) plus a persistent `tdTabCache[1024]`: every function that
+  actually writes to `tdTab` (`tdFixPill`, `tdSetSinglePill`, `tdInitRnd`,
+  `tdDropPills`, `tdInitPublicVarForNewLevel`, and the inline clear-
+  animation step in `gameTinyDoc_update()` - found by grepping every
+  `tdTab[x][y] = ...` assignment site in the file, not just the obvious
+  ones) sets the flag; `tdTinyFlip()` only calls the real composite (and
+  refreshes the cache) when the flag is set, otherwise just copies the
+  cached bytes for that row - a plain array read, zero `blitzSprite()`
+  calls - and clears the flag once a full dirty pass finishes. This is a
+  different *class* of lever than the previous two rounds for this game
+  (which were both about reducing per-call cost); this one is about
+  avoiding the call entirely across consecutive unchanged frames.
+  Verified across several drop-then-idle cycles: locked-grid rendering
+  stayed pixel-identical whether freshly recomputed or served from cache,
+  newly-added pills still appeared correctly on the next dirty frame, and
+  game-over/attract transitions were unaffected (they use a separate
+  render path entirely). This kind of dirty-flag caching is worth
+  reaching for on any future port whose per-frame cost scales with a
+  mostly-static board/grid state rather than with something that
+  genuinely changes every frame (a falling piece, animation timers, etc).
+  **A real regression from that same caching, reported much later in the
+  session**: the user noticed the viruses sitting in the bottle from the
+  start of a level barely seemed to animate anymore, making them harder
+  to visually distinguish at a glance - exactly the "animation timers"
+  case the caching writeup above already called out as the wrong thing
+  to cache, but the actual virus-wiggle animation wasn't caught at the
+  time. Root cause: `tdFrmVirus` (a 3-frame idle-wiggle counter,
+  `tdAnimSpeedVirus`-throttled to advance roughly every 3 real frames) is
+  baked into the locked-grid composite's virus-layer blit
+  (`tdCompositeTabIntoBuffer`), but that composite only recomputes when
+  `tdTabDirty` is set by an actual grid *mutation* - advancing a purely
+  cosmetic animation counter doesn't touch `tdTab` at all, so the cached
+  buffer kept showing whichever virus frame was active during the *last*
+  real grid mutation, only ever jumping to a new one whenever some
+  unrelated pill-lock/clear happened to also refresh the cache (rare
+  compared to how often the animation itself ticks). Fixed with one line
+  - `tdTabDirty = true;` added right where `tdFrmVirus` actually changes -
+  so the animation keeps its own 3-frame cadence exactly as before the
+  caching was introduced, while the cache still holds for every other
+  frame where nothing (grid or animation) actually changed. Verified by
+  cropping the virus region from 8 consecutive real-time screenshots and
+  diffing them pairwise (hundreds of differing pixels between neighboring
+  frames, versus what would be near-zero if still stuck) rather than
+  eyeballing a static comparison - the same "instrument and prove
+  empirically" approach as every other reported-but-hard-to-eyeball bug
+  this session.
+- `src/games/gameTinyBert.c` - Tiny Bert (Daniel C, GPLv3). Fifth Tier-2
+  game, picked next for its lowest remaining goto count among the
+  non-C++-class Daniel-C titles (Tiny DDug was checked again and is still
+  a C++-class file, deferred same as before). A Q*bert clone: an
+  isometric 4-row pyramid, jump diagonally between plates to flip every
+  one to the target color while dodging a bouncing ball and a snake
+  enemy. Applied every lesson from this session's optimization/bug-fixing
+  work **from the start** instead of needing a later pass: composited the
+  3 moving sprites (plus their black cutout masks, used for monochrome
+  silhouette punch-through) once per page row into shared buffers rather
+  than recomputing all 3 at every pixel; gated the narrow-range UI layers
+  (lives, score) by row; always redraws the full 128x8 screen (upstream's
+  `Scan` parameter skipped columns 109-127 most frames, the exact same
+  VRAM-persistence assumption already found and fixed in Pinball/Doc).
+  One real structural bug caught *while writing the port*, before ever
+  compiling: upstream's `Sprite` struct used C++ in-class default member
+  initializers (`uint8_t sw=1; Timer_new_Live=MAX_RENEW;`) that only ever
+  run once, since the `Sprite sprite[3];` declaring them sits inside
+  `loop()`, which here never actually returns/restarts from scratch (it's
+  one big internal goto-loop, so that local declaration executes exactly
+  once, at power-on) - ported as an explicit one-time init in
+  `gameTinyBert_init()` rather than relying on struct-literal defaults
+  (not supported for plain C structs here regardless). Also caught, only
+  after drafting a first version and re-reading upstream more carefully:
+  upstream's `MENU_LOOP:`/`NEW_GAME:`/`NEW_LEVEL:` fall-through means a
+  fresh game's *first* level setup (score/lives/dificulty/plate-grid
+  reset) only ever happens once - at power-on, or again after a true
+  game-over - never on every "press fire to start" at the title screen
+  (that press only flips a session flag and resets the score digits). My
+  first draft called the full reset from the fire-press handler itself,
+  which would have silently re-randomized/reset state on every attract-
+  to-playing transition instead of matching upstream's actual one-shot
+  reset semantics; split into `bertBeginAttract()` (full reset, matching
+  `NEW_GAME:`) vs. `bertSetUpLevel()` (level-only reset, matching
+  `NEW_LEVEL:`, reused on both true game start and level-clear) before
+  ever building, once the distinction was noticed by re-tracing the
+  control flow rather than assuming the first draft's shape was right.
+  Verified via extended play: pyramid/lives/score/lift-platform rendering
+  all correct on the first build, jump movement in all 4 directions,
+  enemy AI wandering and flipping plates, and - unprompted, during a
+  routine soak test - a real player-enemy collision that correctly
+  decremented lives (3->2) and respawned Bert at the pyramid's apex, then
+  30+ seconds of continued autonomous play with no crashes.
+  **Still reported heavy after shipping**: the user asked directly whether
+  there was more room to optimize, since Bert was still noticeably heavy
+  despite the sprite-compositing/row-gating done at ship time. There was:
+  the pyramid tiles (`bertGridPlate()`) and the two lift platforms were
+  *not* composited or gated the same way the 3 moving sprites were - both
+  still called `bertBlitzSprite()` for all 1024 pixels/frame regardless of
+  whether anything was actually there, the exact O(pixels x objects)
+  pattern already fixed for the sprites (and for Bomber/Pacman/Doc
+  earlier). Fixed the same way: `bertCompositePlatesIntoBuffer()` walks
+  only the (up to 4) pyramid cells whose row overlaps the current page and
+  are actually flipped, using upstream's own hardcoded cell positions
+  (matching its `PlatePos[]` table, which `GridPlate()` had hand-unrolled
+  into per-row literal calls rather than looping - likely an AVR
+  performance choice) instead of scanning all 128 columns; the lift
+  platforms got a straightforward row+column range gate (`LIFT_PLATE` is
+  1 page tall at a fixed y, only 13 columns wide at each of 2 fixed x
+  positions) in place of calling `bertBlitzSprite()` unconditionally for
+  every column and trusting its own bounds check to no-op most of them.
+  Re-verified afterward: identical rendering, plus visible confirmation
+  the plate rewrite is correct (score changed to a real nonzero value and
+  3 tiles visibly flipped to solid white, matching the grid state exactly)
+  across a jump sequence and a further soak test with no regressions. This
+  is the second time in this session a game shipped with only *some* of
+  its per-pixel draw layers optimized (Doc had the same gap first) - worth
+  checking *every* draw-layer function in a new port's flip routine against
+  this pattern before shipping, not just the obviously-largest one.
+  **Requested audit, much later, using the new perf overlay** ("check Tiny
+  Bert for optimizations"): found and fixed two more real gaps, plus a
+  useful negative result.
+  1. The attract/title screen branch of `bertTinyFlip()` called
+     `bertPolicePrint(x,y)` (the score-digit font blit, self-gated to
+     `y==0 && x>=94`) unconditionally for all 1024 pixels/frame - the
+     in-game branch already call-site-gated the same function, but the
+     attract branch (which also genuinely needs it, to show the live
+     score on the title screen) never got the equivalent gate. Fixed by
+     matching the same `scoreRow && x>=94` gate the in-game branch uses.
+  2. `bertCompositePlatesIntoBuffer()` (the pyramid-tile composite) was
+     still being fully recomputed every single render frame, even though
+     `bertPlateGrid` only actually changes once every ~15+ real frames (on
+     a jump landing) or at level start/flash - the same "recompute an
+     unchanging structure every frame" waste Tiny Doc's own locked-grid
+     composite had, just not yet applied here. Fixed with a
+     `bertPlateDirty` flag plus a persistent `bertPlateCache[1024]`:
+     `bertRefreshPlateCacheIfDirty()` recomputes all 8 rows only when the
+     grid actually changed (marked at all 3 real mutation sites -
+     `bertResetPlateGrid()`, `bertFlipPlate()`, and the jump-landing tile
+     flip), otherwise `bertTinyFlip()` just reads the cached array.
+  3. **Measured, not just applied on theory** (per this session's own
+     established practice): gameplay CPU stayed at a steady ~70-76% both
+     before and after the plate-cache fix, with no meaningful change even
+     during entirely passive play (no input, plate grid genuinely static).
+     This means the plate composite was *not* actually the dominant cost
+     here - Bert's real bottleneck appears to be the sheer number of real
+     `md_drawColumn()` GPU-blit calls the checkered-dither background art
+     demands (nearly all 1024 columns/frame are non-zero, so almost none
+     of the "skip if value==0" short-circuit fires) - an inherent cost of
+     this game's dense visual style under the shared column-atlas
+     rendering model, not a fixable inefficiency in Bert's own compositing
+     logic. Both fixes above are still real, safe, correct improvements
+     (verified via screenshot: tiles flip correctly, score renders
+     correctly on both the attract and gameplay screens, no regressions)
+     - they just weren't the source of the ~70% baseline. Consistent with
+     this project's own standing lesson from the column-run-coalescing
+     regression: measure before concluding an optimization helped, even
+     when the reasoning behind it is sound.
+- `src/games/gameTinyTris.c` - Tiny Tris (Daniel C, GPLv3). Fourth Tier-2
+  game (a falling-block puzzle clone) - button mapping and structure again closely mirror
+  the other Daniel-C games (analog-axis-plus-discrete-pin, same author's
+  generic `blitzSprite`/`RecupeLineY`/`RecupeDecalageY` primitives, no
+  `arand()` fix needed since `PSEUDO_RND_TTRIS` is upstream's own rotating
+  0-6 counter, not a real `rand()` call). Its 12x19 playfield is stored
+  bit-packed (`Grid_TTRIS[12][3]`, 8 rows per byte, 3 bytes per column,
+  matching how upstream's own `GRID_STAT_TTRIS`/`CHANGE_GRID_STAT_TTRIS`
+  address it) - kept faithful to that representation rather than
+  simplified to a plain per-cell array, same as this project's other
+  bit-packed data structures. `Tiny_Flip_TTRIS(uint8_t HR_TTRIS)`'s
+  partial-redraw width parameter (82-of-128 columns most frames) was
+  dropped from the start (always redraws full width), avoiding the
+  Pinball/Doc VRAM-persistence bug proactively rather than rediscovering
+  it. `DELETE_LINE_TTRIS()`'s blocking 5-iteration flash-and-delay
+  animation became an explicit `TRIS_STATE_LINE_FLASH` sub-state advancing
+  one half-step per real frame, same treatment as every other blocking
+  upstream loop this session. Locked-grid/falling-piece/preview-piece
+  rendering was built as per-cell-per-page compositing *from the start*
+  (not retrofitted after a "still heavy" report, unlike Bert/Doc) -
+  `trisCompositeGridIntoBuffer()`/`trisCompositeDropPieceIntoBuffer()`/
+  `trisCompositeNextBlockIntoBuffer()` only visit cells that actually
+  overlap the current page row and are actually filled/present, rather
+  than scanning every candidate cell against all 1024 pixels the way
+  upstream's own `Recupe_TTRIS()`/`DropPiece_TTRIS()`/`NEXT_BLOCK_TTRIS()`
+  did. EEPROM high-score persistence (a 4-slot checksummed backup scheme)
+  is stubbed to in-memory-only, matching the NumberPlace/Tiny Invaders
+  precedent.
+  **Two real bugs found via actual play, both in the newly-added menu
+  pagination + this game's own attract-screen rendering, neither present
+  in upstream since AVR has no per-frame instruction budget to blow**:
+  (1) the title screen flickered heavily - proven by screenshotting
+  consecutive frames, one of which showed only the top ~1.5 of 8 page-rows
+  drawn before cutting to black, i.e. exactly the CPU-load model's own
+  documented risk ("if a frame's work exceeds budget, the CPU literally
+  stops executing mid-instruction-stream"). Root cause: upstream's own
+  `recupe_SCORES_TTRIS`/`recupe_Nb_of_line_TTRIS`/`recupe_LEVEL_TTRIS`
+  each self-gate with a position bounds-check *before* doing any of the
+  digit-splitting arithmetic or blit calls - but the ported versions had
+  that gating moved to the gameplay flip's call site instead (redundant
+  with, not replacing, self-gating) and the *attract-screen* flip
+  (`trisFlipIntro()`, which has no such call-site gating at all) called
+  all three completely unconditionally across all 1024 pixels/frame,
+  reintroducing the exact O(pixels x objects) cost this session's other
+  ports had already learned to avoid - except this time in a *newly*
+  written function, not a retrofit gap. Fixed by moving the bounds checks
+  back inside the three functions themselves (matching upstream exactly),
+  so both flip functions get the cheap short-circuit regardless of
+  call-site gating. (2) The user separately reported the flicker
+  persisting specifically while the blinking on-screen START button was
+  in its visible half of the cycle - `Recupe_Start_TTRIS` upstream has
+  *no* position gate at all (only the blink-timer check), so ported
+  as-is it called `blitzSprite` twice per pixel across all 1024 pixels
+  whenever the button was visible, with nothing but the timer condition
+  bounding the cost; added a position bounds-check (`x` in [49,78], `y`
+  page in [3,5], the button's own footprint) not present upstream, since
+  upstream never needed one to stay inside a hard instruction budget.
+  Also applied this session's dirty-flag-caching lesson *proactively*:
+  `trisCompositeGridIntoBuffer()` now only recomputes when
+  `trisGridDirty` is set (done at the single choke point every grid
+  mutation already passes through, `trisChangeGridStat()`, plus
+  `trisInitAllVar()`'s direct full-grid reset) and otherwise reuses a
+  persistent `trisGridCache[1024]`, addressing the user's report that CPU
+  usage climbed further once the board had many locked blocks (the
+  locked-grid composite is the one render cost that scales with how full
+  the board is, and was being redone every frame even while a piece was
+  merely falling and nothing about the grid had changed). Verified: dense
+  consecutive-frame screenshots across a full blink cycle now show every
+  frame fully drawn (both with and without the START box visible), and an
+  extended play session (movement, rotation against the left wall,
+  soft-drop, piece lock, score update, preview-piece advance) rendered
+  correctly with no artifacts.
+  **A further report, after the two fixes above**: the user still
+  considered the attract screen's blinking START button to be "constantly
+  redrawing" while it's visible, and pointed out this wasn't something a
+  screenshot could prove or disprove either way (a still image can't show
+  whether a *sequence* of identical frames was recomputed from scratch
+  each time or not) - the actual fix needed was architectural, not a
+  render-cost optimization within an already-redrawing frame. The whole
+  attract screen (`trisFlipIntro()`) was still being called
+  unconditionally every engine frame regardless of whether anything on
+  screen had actually changed - correct in output, but wasteful the same
+  way recomputing an unchanged locked-grid composite every frame would be
+  (see the dirty-flag-caching lesson elsewhere in this file), just
+  applied at the whole-screen level instead of one render layer. Fixed
+  with a `trisAttractDirty` flag plus a tracked `trisAttractBoxVisible`
+  boolean: the frame-counter logic that steps `trisIntroTimer1` now only
+  sets the dirty flag when the derived visible/hidden boolean actually
+  flips, and `trisFlipIntro()` is only called (and the flag cleared) when
+  dirty - so the attract screen draws once on the exact frame the button
+  needs to appear, holds that identical frame while nothing changes, then
+  draws once more on the exact frame it needs to disappear, instead of
+  recomputing an identical frame 60 times a second. Verified the state
+  machine logic by inspection (exactly one call site for `trisFlipIntro()`,
+  gated correctly, `trisAttractDirty`/`trisAttractBoxVisible` reset
+  correctly in `trisBeginAttract()` so returning to the attract screen
+  after a game over still redraws immediately) and confirmed the blink
+  still renders correctly and fire-press still transitions into gameplay
+  cleanly - did not attempt to re-prove the original "redrawing" report
+  via screenshots, since the user had already correctly pointed out a
+  static capture can't distinguish "redrawn every frame" from "held
+  frame" when the two look pixel-identical.
+  Tiny Tris is also the 10th game added to
+  the menu - the trigger for finally needing `src/menu.c`'s pagination
+  (added proactively ahead of this port, anticipating the menu was "right
+  at the limit" of one screen's worth of entries): LEFT/RIGHT now jump a
+  whole page at a time (9 games/page, wrapping past the first/last page),
+  with a "PAGE n/total" indicator shown only when there's more than one
+  page - verified via screenshot that page 1 still shows the original 9
+  games unchanged and page 2 correctly shows just Tiny Tris.
+
+**Menu game-select thumbnails, added after all 10 games shipped**: the
+menu now shows a real gameplay screenshot of the currently-selected game,
+switching immediately as the selection moves, in space freed up by moving
+the game list itself close to the left edge (small margin only, was
+previously centered further right). Asset pipeline, built from scratch for
+this feature:
+- Captured one real *gameplay* screenshot per game (not a title/attract
+  screen) via the existing Puppeteer/WebGL test harness, at a 640x360
+  viewport (native resolution, so no scale-factor math is needed when
+  cropping) - each game needed its own tailored button sequence to reach
+  an actual playing state (some go straight to gameplay off one fire
+  press, several needed 2-3 presses through a logo/title/ready screen
+  first, matched by trial and error per game rather than assumed).
+- Cropped each to the actual 640x320 game area (stripping the 20px
+  top/bottom letterbox bars every game already renders inside) and
+  downscaled to 256x128 (40% of 640x320, per the requested size) with
+  ImageMagick.
+- **First attempt used a 256x1280 vertical strip (all 10 stacked
+  straight down) - this would have exceeded Vircon32's hard 1024x1024
+  texture dimension cap** (confirmed directly in the emulator's own
+  source, `V32Console.cpp`: "Cartridge texture does not have correct
+  dimensions (1x1 up to 1024x1024 pixels)") - caught before ever trying
+  to load it, not discovered via a crash. Rebuilt as a 4-column x 3-row
+  grid instead (1024x384 - comfortably inside the cap), with the 10 real
+  thumbnails filling reading order left-to-right/top-to-bottom and the 2
+  trailing unused cells left as plain black filler.
+- New asset `assets/thumbnails.png` -> `obj/thumbnails.vtex` (via
+  `png2vircon`, wired into `Make.sh`/`Make.bat`/`rom.xml` alongside the
+  existing `columns.png`/`columns.vtex` atlas) - loaded as a *second*
+  cartridge texture (id 1, since `rom.xml`'s `<textures>` list order
+  assigns ids) - `md_initVideo()` (`src/portVircon32.c`) defines 12
+  regions across it via `define_region_matrix()` (ids 0-9 usable, matching
+  `addGames()`'s own registration order in `menuGameList.c` exactly, so
+  "region id == game index" needs no separate lookup table).
+- New `md_getThumbnailCount()`/`md_drawGameThumbnail(gameIndex, x, y)`
+  primitives (`machineDependent.h`/`portVircon32.c`) - `menu.c` calls the
+  latter once per frame with the current `selection` at a fixed position
+  in the freed right-side margin, gated on the former so a future 11th+
+  game without a baked thumbnail yet just draws nothing there instead of
+  reading out of range. Confirmed no texture-selection leakage between
+  the menu's own draw (which explicitly selects texture 1 for this call)
+  and a subsequently-launched game's own rendering (`md_beginFrame()`
+  already unconditionally re-selects texture 0 every frame regardless of
+  whatever the menu left selected) - verified via screenshot: launching
+  Tiny Pinball from the menu still renders its own title screen
+  correctly, and returning to the menu afterward still shows the correct
+  thumbnail for whichever entry is selected, with no corruption either
+  direction.
+- **Reference/precedent**: the user's sibling project `retrotime_vircon32`
+  already has its own, more elaborate version of this same idea (a
+  `CImage`/`Texture` abstraction loading pre-made "gamepreview" screenshot
+  atlases for a scrolling title-screen background effect) - confirmed
+  pre-baked screenshot assets is the established pattern for this kind of
+  feature across the user's own Vircon32 projects, but that project's
+  heavier abstraction layer (depends on its own `texture.h`/
+  `SDL_HelperTypes.h`) wasn't pulled in here - this project kept using its
+  own existing simpler direct `video.h` pattern (the same one
+  `columns.png`/`COLUMNS_TEXTURE_ID` already established) rather than
+  importing a second asset framework for one feature.
+
+**Thumbnail grid grew from 4x3 to 4x4 when Tiny Minez shipped as the 13th
+game**: the original 12-cell grid (1024x384) was exactly full, so a 13th
+region needed a new row rather than fitting in existing slack. Extended
+`assets/thumbnails.png`'s canvas to 1024x512 (still comfortably inside the
+1024x1024 cap - room for several more games before another row is needed),
+composited the new screenshot into cell 12 (region ids stay row-major, so
+this is still just "next reading-order slot" with no renumbering of the
+existing 12), and bumped `portVircon32.c`'s `THUMBNAIL_GRID_ROWS` (3->4)
+and `THUMBNAIL_COUNT` (12->13) to match - `THUMBNAIL_GRID_COLS` (4) was
+untouched, so `define_region_matrix()`'s region-id assignment for the
+existing 12 thumbnails is unaffected by the new row. Verified via
+screenshot that all 12 existing thumbnails still render correctly at their
+original positions and the new Tiny Minez thumbnail appears correctly
+when it's the selected entry (9th alphabetically, last on menu page 1).
+
+**Tiny Missile's own thumbnail was initially forgotten entirely** - shipped
+without one for a while until the user directly pointed out the menu
+still showed no screenshot for it, exactly the standing per-port step this
+project's own memory already calls out. Fixed the same way as every prior
+addition: captured a real gameplay screenshot (crosshair, a missile trail,
+and an interceptor detonation flash all visible in one frame), cropped/
+downscaled to 256x128, and composited into cell 13 - still inside the
+existing 4x4 grid (14 of 16 cells now used, 2 free), no grid growth
+needed this time. `THUMBNAIL_COUNT` bumped 13->14. Verified via
+screenshot that Tiny Minez's own thumbnail (cell 12) was untouched and
+Tiny Missile's new one displays correctly when selected.
+
+**Two follow-up layout tweaks to the same menu, requested right after**:
+(1) the 3 header lines (title + the 2 control-hint lines) were each at a
+hand-picked fixed x that only happened to look centered for their
+original text - once the page-hint line's own text grew a variable-length
+"N/total" suffix, that stopped holding up in general. Replaced with a
+small `menuCenteredX(text)` helper (`strlen(text) * bios_character_width`
+against `video.h`'s own `screen_width`) so all 3 lines - including the
+page-hint line, whose length actually varies with the page/total digit
+count - stay genuinely centered regardless of content length. (2) the
+thumbnail was top-aligned with the list (`y = LIST_AREA_TOP`) - moved to
+be vertically centered within the *whole* list/selection area instead
+(`LIST_AREA_TOP` down to `screen_height`), so it sits at the same on-screen
+position on every page regardless of how many entries that page actually
+has (a 1-entry page like Tiny Tris's own page 2 doesn't pull the
+thumbnail up to hug just that one entry). `MD_THUMBNAIL_WIDTH`/
+`MD_THUMBNAIL_HEIGHT` were promoted from `portVircon32.c`-local defines to
+`machineDependent.h` so `menu.c` could reference the real thumbnail size
+for this centering math without duplicating the constant.
+
+**"BY <author>" credit line added under the thumbnail, requested much
+later in the same session**: `struct Game` (`menu.h`) gained an `author`
+field, `addGame()` a new parameter for it - each game in `menuGameList.c`
+passes its actual credited author ("OBONO" for NumberPlace/2048/
+HollowSeeker, "DANIEL C / SVEN B" for Tiny Invaders, "DANIEL C" for most
+of the rest, "SVEN B / LORANDIL" for Tiny Minez - see this file's own
+Licensing section and the per-game Status entries above for how each
+credit was determined, since more than one turned out to need both names
+rather than a single guessed one).
+Rather than just append the text below the thumbnail at a fixed offset
+(which would un-center the thumbnail-plus-text group as a whole,
+re-introducing the exact asymmetry the layout tweap above fixed), the
+vertical-centering math was extended to treat the thumbnail and the
+author line as one combined block: `blockHeight = MD_THUMBNAIL_HEIGHT +
+authorGapY + bios_character_height`, centered within the same
+`LIST_AREA_TOP`-to-`screen_height` span the thumbnail alone used before -
+the thumbnail draws at the block's top, the author text (`strcpy`+
+`strcat`'d as `"BY " + author` each frame, matching the existing page-
+hint text-building pattern) at its bottom, horizontally centered within
+the thumbnail's own width (not the full screen, since the thumbnail sits
+in the right-side margin). Verified via screenshot across four games
+(2048/HollowSeeker/NumberPlace/Pinball, spanning both `OBONO`- and
+`DANIEL C`-credited titles and both menu pages) that the credit line
+renders correctly centered under each thumbnail and the whole block stays
+vertically centered regardless of which game is selected.
+
+**Menu list sorted alphabetically by title, requested right after** -
+with an explicit heads-up from the user to watch out for the thumbnail
+mapping specifically, which turned out to be exactly the right thing to
+watch for. `games[]` itself is *not* reordered - it stays in
+`addGame()`'s own registration order, since that order is also what the
+thumbnail atlas's region ids were baked against (region id ==
+registration index) and what a launched game's `init`/`update` function
+pointers are looked up by (`menu_getGame()`). Reordering `games[]`
+directly would have silently scrambled both. Instead, added a separate
+`int[MAX_GAMES] displayOrder` indirection array (`menu_buildDisplayOrder()`,
+a small selection sort by `strcmp`-ing `games[].title` - `gameCount` is
+always a handful of entries, so O(n^2) is irrelevant here), built once on
+the first `menu_init()` call (guarded by a `displayOrderBuilt` flag, since
+`menu_init()` also runs every time the player returns from a game and
+`games[]`/`gameCount` never change after boot). `selection` continues to
+mean "display position" exactly as before (paging/up-down math is
+unchanged) - every place that used to read `games[selection]` or draw
+`selection`'s own thumbnail now goes through `displayOrder[selection]`
+first to get back the real registration index, and the value
+`menu_update()` returns to `main()`'s dispatch loop (which launches
+`menu_getGame(chosen)`) was switched from `selection` to that same
+resolved index - otherwise the menu would still *display and launch*
+correctly-corresponding text, but show a mismatched thumbnail, or worse,
+launch a different game than the one whose title was highlighted, the
+exact class of bug the user's warning was pointing at. Verified via
+screenshot across the reordered list (now 2048 -> HOLLOWSEEKER ->
+NUMBERPLACE -> TINY BERT -> TINY BOMBER -> TINY DOC -> TINY INVADERS ->
+TINY PACMAN -> TINY PINBALL -> TINY TRIS, digits sorting before letters):
+each selected entry's thumbnail matched its own title (spot-checked 2048,
+Tiny Bert, Tiny Tris), and firing on the reordered first entry ("2048",
+registration index 2, no longer index 0) actually launched 2048 itself
+rather than whatever used to sit at position 0.
+- `src/games/gameTinyArkanoid.c` - Tiny Arkanoid (Daniel C, GPLv3). Fifth
+  Tier-2 game (a Breakout/Arkanoid clone - a paddle on the left edge moves
+  up/down, launching a ball that bounces around a 6x5 block grid on the
+  right). Picked as one of the two lowest-goto (goto=8) untried titles
+  (Tiny Trick, the other, is meaningfully bigger - 566 vs 366 lines - so
+  Arkanoid went first). Data tables extracted programmatically as usual.
+  Two things ported directly rather than needing the usual retrofit:
+  built per-object footprint gating into the render loop from the start
+  (every layer here already self-gates internally, matching upstream's
+  own shape, unlike Bomber/Pacman's re-scanned sprite lists), and
+  replaced a stateful per-column texture-tiling counter (`SWIFT_TEXTURE`,
+  reset at x==0 and incremented per call) with a direct `(x+1) % 15`
+  computation after tracing through its exact reset/increment order and
+  confirming the two are byte-identical - avoids a stateful global with a
+  call-order dependency this port's own compositing might not preserve.
+  The intro tune (`PLAYMUSIC()`, 46 notes) and the shorter life-lost/
+  level-clear cues are genuinely sequential blocking `Sound()` calls
+  upstream - built a small shared frame-stepped note sequencer
+  (`arkStartNoteSeq`/`arkAdvanceNoteSeq`) that fires one note at a time,
+  waiting each note's own real duration (computed with the exact same
+  freq/dur formula `Sound()` already uses) before advancing - the first
+  time this project has had to actually sequence real multi-note music
+  rather than substitute a handful of simultaneous representative tones.
+  **Two real bugs found via actual play, both from this game's own
+  structural shape rather than a retrofit gap**:
+  (1) the ball and paddle moved *extremely* slowly - traced to upstream's
+  own `Frame` counter incrementing every single uncapped loop iteration
+  (with only the *redraw* throttled to `Frame%32==0`), so paddle-read/
+  ball-update modulo checks fire far more often, in real time, than the
+  display refreshes - porting this the same way every *other* game's own
+  tick counter was ported here (one increment per real 60fps frame,
+  since those games run their whole logic+redraw together each tick with
+  no internal throttle of their own) silently made the whole game ~8x
+  slower than intended, since this is the first port where the
+  logic-tick rate and the redraw rate were two genuinely different things
+  upstream. Fixed by decoupling them: `gameTinyArkanoid_update()`'s
+  playing-state branch now runs the paddle/ball logic body in a small
+  inner loop (`ARK_TICKS_PER_FRAME` times per real frame) while still
+  calling the render function only once at the end - restores a normal
+  arcade pace without changing the redraw rate. Worth checking for on any
+  future port whose upstream loop has its *own* internal tick counter
+  separate from its own redraw gate, rather than assuming every game's
+  timing model matches the ones already ported. (2) still reported
+  hitting 100% CPU after the speed fix - the render loop calls 6 layer
+  functions unconditionally for all 1024 pixels/frame (6144 calls total),
+  and even though every layer already self-gates internally (bounds-check
+  before real work, matching upstream), that self-gating only cuts the
+  *work per call*, not the *call count* - without `v32opt`'s inlining
+  (this project's default dev build uses `SKIP_V32OPT=1`), raw per-call
+  overhead multiplied by 6144 calls/frame was apparently the dominant
+  cost. Fixed by gating the call *site* by row/x-range instead (same
+  technique Tris/Bert/Doc already needed for their own layers) - since
+  every layer here has an easily-computable narrow footprint, this cuts
+  the call count to roughly the number of pixels each layer actually
+  occupies (~1245 calls/frame total) instead of 1024 regardless of
+  footprint. A generalizable lesson distinct from the earlier "self-
+  gating must be checked per caller" one: *even a correctly self-gated
+  function* still costs a full call every time it's invoked, so a layer
+  with a small footprint should still be gated at the call site when it's
+  invoked at every one of 1024 pixels - self-gating avoids wasted *work*,
+  call-site gating avoids wasted *calls*, and a naive port can need both.
+  A later request also swapped which d-pad direction moves the paddle
+  which way - upstream's own `TrackBary`/`TrackBaryDecal` wiring has
+  increasing values move the paddle to a larger page index (further down
+  the screen), so a first, faithful port had UP move the paddle down and
+  vice versa; this reads as inverted on a real gamepad even though it
+  matched upstream exactly, so the mapping was swapped (and LEFT/RIGHT
+  added as aliases for UP/DOWN, since the game's own art - title screen,
+  side panels - is drawn sideways as if meant to be played with the
+  display physically rotated, which Vircon32's screen can't do).
+- `src/games/gameTinyTrick.c` - Tiny Trick (Daniel C, GPLv3). Twelfth game,
+  ported after the quit-confirmation dialog and further Tris/Doc bug fixes
+  (see below) - an air-hockey game: player (white) and computer (black)
+  paddles knock a puck around a rink, scoring past a goalie into the left/
+  right goal, first to 10 wins. Same `FastTinyDriver.h` button-read pattern
+  as every other Daniel-C game (free 2D paddle movement via
+  isUp/Down/Left/RightPressed(), Fire hits the puck while "dragged").
+  Structural decisions: upstream's `Recupe()` composite is *subtractive*
+  (`background & ~sprite1 & ... & ~sprite5`, forcing every sprite
+  silhouette to solid black over the busy rink texture) rather than the
+  OR-based composite every other game here uses - by De Morgan's law
+  (`~s1 & ~s2 & ... = ~(s1|s2|...)`), ORed all 5 sprites into one shared
+  per-page buffer exactly like every other game's own compositing
+  (`trkCompositeSpritesIntoBuffer()`), then inverted and ANDed the
+  *combined* mask against the background once at the end - same simpler
+  shared-buffer shape, just applied to a subtractive composite. Built
+  per-object-per-page footprint gating into the 5-sprite composite from
+  the start (not a later retrofit), applying Arkanoid's freshly-learned
+  lesson that even self-gated functions need call-site gating. Converted
+  upstream's blocking `SCREEN_GOAL()` slide-in/hold/slide-out animation
+  (13 chained `intro()` calls plus two `_delay_ms()`s) into an explicit
+  `TRK_STATE_GOAL_SLIDE_IN/HOLD/SLIDE_OUT/HOLD2` sub-state sequence, one
+  step per real frame - the usual "blocking loop -> resumable state"
+  treatment. The title screen only redraws on two exact blink-timer values
+  (matching upstream's `switch(TIMER){case 0:...;case 128:...}` with no
+  `default`) - same shape as Tris's attract screen and the obono games'
+  idle screens (see the dialog write-up below), so this port also exposes
+  an `onResume` hook (`gameTinyTrick_forceRedraw()`) from the start rather
+  than waiting for a bug report.
+  **Two-round CPU fix for the goal-scored scoreboard, both from real user
+  reports after shipping**: (1) `trkIntro()`'s goalScreen 1/2/3 branches
+  called `trkBlitzSprite` 2-4x per pixel unconditionally across all 1024
+  pixels/frame with zero position gating - the same shape as Arkanoid's
+  call-count bug. Fixed by adding row+x-range gating (`panelRows`/
+  `numRows`/`winLoseRows`, computed once per row) around each call. (2)
+  reported still at 100% CPU after that fix - even gated, the composite
+  still recomputed `trkCompositeSpritesIntoBuffer(y)` fresh every one of
+  the ~90 frames of the goal sequence, despite all 5 sprites being
+  completely frozen (no physics runs) for that whole sequence - pure
+  wasted recomputation of an unchanging result. Fixed with a freeze-cache:
+  `trkFreezeSpriteMask()` computes the composite once, on the exact frame
+  the goal sequence begins (called right before entering
+  `TRK_STATE_GOAL_SLIDE_IN`, both from the normal in-play goal-detection
+  branch and matching the same call the win/lose screen path already
+  needed), storing the result in a persistent `trkFrozenMaskCache[1024]`;
+  `trkIntro()`'s background-composite branch then just reads the cache
+  instead of recomputing, for every frame of the sequence.
+  `trkTinyFlip()` (real gameplay) resets `trkMaskFrozen = false` at its own
+  top so the cache is only trusted while genuinely frozen. Also inlined
+  `trkPatinoire1_2(x,y)`'s background-mirroring lookup (`x>63` folds to
+  `127-x`) directly into both `trkTinyFlip()`'s and `trkIntro()`'s pixel
+  loops, removing 1024 extra function calls/frame each - a background
+  lookup this simple doesn't need its own call, unlike every other game's
+  background reads here which are already a plain array index with no
+  wrapper. This is the first port in this session where a *fully frozen,
+  multi-frame sequence* (not just a single static screen) got its own
+  dedicated cache, distinct from the dirty-flag caching Doc/Tris use for
+  a mostly-static-but-occasionally-changing grid - worth reaching for
+  specifically when a whole run of frames is provably identical, not just
+  "usually unchanged". Verified via a temporary debug hook that jumped
+  `gameTinyTrick_init()` straight into `TRK_STATE_GOAL_SLIDE_IN` with
+  preset scores (bypassing the normal goal-scoring trigger, which didn't
+  reliably reproduce within automated screenshot timing) - screenshots
+  across the full slide-in/hold/slide-out sequence showed a clean
+  bordered scoreboard panel with correct digits and no artifacts, and the
+  rink/background rendered correctly both during and after the sequence;
+  removed before shipping, then re-verified the normal title -> pre-play
+  -> playing flow still worked correctly on the debug-free build.
+
+**Quit-confirmation dialog, added after all 11 games shipped**: pressing
+Start while a game is running no longer instantly quits to the menu - it
+now opens a black-and-white "CONFIRM / QUIT TO MENU? / YES / NO" dialog
+box first (`drawConfirmQuitDialog()` in `src/portVircon32.c`), and the
+current game's own `update()` is not called at all while it's open (so
+gameplay is genuinely frozen, not just visually paused) - Left/Right
+toggles the selection (defaults to NO, the safer choice), Fire confirms,
+and Start again also cancels.
+- **Rectangle drawing**: `video.h` has no fill-rectangle primitive of its
+  own (only region blits) - added `md_drawSolidRect()`, reusing the
+  columns atlas's own region 255 (byte value 0xFF, an already-loaded
+  solid `TILE_W x TILE_H` white tile) tinted via `set_multiply_color()`
+  and stretched to any size via `set_drawing_scale()` +
+  `draw_region_zoomed_at()` - the same technique the sibling
+  `crisp-game-lib-portable_vircon32` project's own `md_drawRect()`
+  already uses (confirmed by reading its `portVircon32.c`), just built on
+  this project's existing atlas instead of a dedicated 1x1 texture asset.
+  White outline + a smaller inset black rectangle gives the bordered box.
+- **The same physical Fire-press that confirms the dialog must not bleed
+  into whatever comes next** - `md_armInputFireGate()` (already built for
+  the menu->game transition) is called at the moment the dialog resolves,
+  since `md_inputFire()` is a single shared gate every `isFirePressed()`
+  call and the menu's own fire-read both go through. Verified empirically
+  (not just by reading the code) with a Puppeteer test that held Fire
+  continuously across the entire confirm+destination-arrival window: with
+  Tiny Arkanoid, confirming NO with Fire held did not auto-launch the
+  ball on resume (it stayed sitting at the paddle exactly as before,
+  launching only on a genuinely later fresh press); confirming YES with
+  Fire held landed cleanly on the menu without instantly relaunching
+  whatever was highlighted.
+- **A user question about screen capture led to finding a real, more
+  serious bug than the one being asked about.** The user asked whether the
+  game's own screen could be captured right before the dialog and
+  redisplayed after it closes. Vircon32 has no readback API at all (only
+  draw/blit calls), so a literal capture isn't possible - but the
+  practical effect doesn't need one: freezing the game's own `update()`
+  while the dialog is open already leaves its last real frame sitting
+  underneath the dialog untouched, and resuming just calls that same
+  `update()` again against unchanged state, which reproduces the
+  identical frame. *This reasoning quietly assumed every game
+  unconditionally redraws its whole screen on every `update()` call* - the
+  user immediately pushed back ("certain games don't redraw every frame")
+  and asked whether other games had this same issue, specifically
+  mentioning obono's logo screens. Checking confirmed both things: (1)
+  Tiny Tris's attract screen has exactly this gap (`trisAttractDirty`
+  skips the whole draw call when nothing changed - already known from
+  this session's own dirty-flag-caching work, but not cross-checked
+  against the new dialog feature); (2) worse, `obonoCoreShim.c`'s own
+  shared `refreshScreen()` - used by NumberPlace, HollowSeeker, *and*
+  t2048 - has the identical shape (`if (!isInvalid) return;`), and
+  `isInvalid` is only set `true` at specific state-changing moments across
+  all three games, never unconditionally every frame. On an idle static
+  screen (a difficulty-select prompt, a "PRESS BUTTON" title) nothing ever
+  re-invalidates it, so this is actually *worse* than Tris's version -
+  Tris self-corrects within a few frames since its own frame counter keeps
+  ticking, but an obono game's logo/prompt screen could stay stuck
+  showing the dialog's leftover pixels indefinitely, until the player
+  happens to do something that changes state. Reproduced directly:
+  opening the dialog over NumberPlace's difficulty-select screen and
+  cancelling left the dialog box fully visible with nothing redrawn
+  underneath, confirmed via screenshot before any fix.
+- **Fix**: added an optional `onResume` hook to `Game` (`menu.h`'s
+  `struct Game`, `addGame()`'s new 4th parameter - `NULL`/0 for the 8
+  games that don't need it) called once when a game resumes from the
+  dialog (`portVircon32.c`'s dispatch loop, both the NO-via-Fire and
+  Start-cancels-again paths). `obonoCoreShimForceRedraw()` (new,
+  `obonoCoreShim.c`/`.h` - just sets `isInvalid = true`) is wired as the
+  shared hook for NumberPlace/HollowSeeker/t2048 since the flag they all
+  need reset lives in the shim, not per-game; `gameTinyTris_forceRedraw()`
+  (new, `gameTinyTris.c` - sets both `trisAttractDirty` and
+  `trisGridDirty` true, harmless regardless of which state Tris was
+  actually paused in) covers Tris the same way. Verified via screenshot
+  that both NumberPlace (difficulty-select screen) and t2048 (title
+  screen) now redraw cleanly with no dialog remnants after cancelling.
+  **Generalizable lesson**: a "does this game skip its own redraw when
+  idle" audit needs to cover shared shim code, not just each game's own
+  file - the obono bug lived in `obonoCoreShim.c`, affecting 3 games
+  identically, and would have been easy to miss checking games one at a
+  time.
+
+**Same onResume audit, extended to every game shipped since, much later
+in the session** - the user directly pointed out that games ported after
+this dialog existed (Tiny Minez, Tiny Missile, Tiny Bike, Tiny Arena,
+Tiny Gilbert - all still registering `NULL` as their 4th `addGame()`
+argument) had never actually been checked for this bug class, only
+assumed fine by omission. Audited each game's own `update()` state
+machine directly rather than guessing from the symptom:
+- **Tiny Minez**: every state branch calls its own render function
+  unconditionally - confirmed `NULL` is correct, not an oversight.
+- **Tiny Missile**: the only redraw skip is its global
+  `TMIS_TICK_DIVISOR=3` tick throttle, self-correcting within 3 real
+  frames regardless of dialog interference - left as `NULL`, a hook would
+  fix an effectively imperceptible case.
+- **Tiny Bike**: `BIK_STATE_WAIT_RELEASE` has no timer of its own (waits
+  for Fire to release) - real, indefinite-persistence risk.
+  `BIK_STATE_LEVEL_WIN_WAIT`/`GAME_OVER_WAIT` both self-correct, but only
+  after a couple real seconds - still visibly wrong for that whole
+  window. Fixed with `gameTinyBike_forceRedraw()` (a `bikForceRedraw`
+  flag, checked at the top of all three branches).
+  **A follow-up bug in this exact fix, found via direct user report**
+  ("press enter to show confirm dialog and choose no it will show 'next
+  race' text" after reaching the finish and sitting idle): the initial
+  fix redrew with `bikTinyFlip(2)` - the same generic mode ATTRACT/
+  LEVEL_INTRO_WAIT use, which draws `bikIntroPic` full-screen - but
+  `bikIntroPic` is a shared global reassigned *ahead* of when it's
+  actually shown: `bikNextLevel()` sets it to `bikNEXTRACE` right as the
+  level-intro countdown finishes (transitioning into `WAIT_RELEASE`,
+  before the race even starts), preparing that picture for whichever
+  `LEVEL_INTRO_WAIT` screen comes *next* - not the state the player is
+  actually sitting in. Since none of these three states normally redraw
+  at all (the frozen real gameplay frame - bike at the finish line, or
+  at the crash point - just persists, which is correct), the stale
+  `bikIntroPic` value was invisible until this fix started actively
+  redrawing with it, surfacing "NEXT RACE" prematurely over what should
+  have stayed the frozen finish-line frame. **Fixed** by redrawing with
+  mode 0 (the real gameplay composite, reproduced from still-current
+  sprite/track state) instead of mode 2 at all three call sites -
+  confirmed by reading `bikAdjustVarScroll()`/`bikCompositeSpriteMapRow()`
+  that neither has any per-call side effect, so an extra redraw of
+  already-current state reproduces the exact same frozen frame safely.
+  Diagnosed and fixed by code inspection only, per the user's own
+  request, without testing in the emulator.
+- **Tiny Arena**: `AR_STATE_GAMEOVER_WAIT_RELEASE` is a direct port of
+  upstream's own busy-wait with **no redraw at all** - and it's the
+  state reached right at boot (doubling as the attract screen), so this
+  was the highest-risk finding of the whole audit. Fixed with
+  `gameTinyArena_forceRedraw()` (an `arForceRedraw` flag, calling
+  `arTinyFlip()` once when set).
+- **Tiny Gilbert**: `GILB_STATE_TITLE_WAIT` (the actual title/attract
+  screen, no timer, indefinite risk) and the intro-jingle/wait states
+  (bounded to a couple seconds, fixed for consistency) all share the same
+  static logo picture - fixed with `gameTinyGilbert_forceRedraw()`
+  (a `gilbForceRedraw` flag, redrawing via `gilbIntro()`).
+  Verified via screenshot: cancelling the dialog from Gilbert's title
+  screen redraws it cleanly with no dialog remnants (byte-for-byte the
+  same frame as before the dialog opened); cancelling from Arena's boot
+  screen also redraws cleanly - a follow-up check confirmed the "START"
+  text's normal blink cycle (visible/blank/visible) continues correctly
+  afterward, so an initial blank-looking frame right after cancelling
+  was just ordinary blink timing landing on its "off" phase, not a
+  regression, rather than assuming the fix had failed.
+- `src/games/gameTinyMinez.c` - Tiny Minez (credited in the menu as "SVEN B
+  / LORANDIL" - the `.ino`'s own header says "Programmer: Sven B" but
+  lists contact email Lorandil@gmx.de, the same author already credited
+  for Tiny Invaders; unclear whether that's a pen name or a separate
+  collaborator, so both names are credited rather than guessing. GPLv3,
+  same `tinyJoypadShim`/`FastTinyDriver.h` lineage as
+  Tiny Invaders/Pinball/Pacman/Bomber/Doc/Bert/Tris/Arkanoid/Trick). A
+  Minesweeper clone on a fixed 12x8 grid, 4 difficulty levels (5/10/15/20
+  mines). The most structurally novel port so far: upstream's `Game`/
+  `Selection` are real C++ classes (`TinyMinezGame.h`/`.cpp`,
+  `Selection.h`/`.cpp`) - the first port in this project to actually do
+  the class-to-plain-function conversion that had kept TinyDungeon/Tiny
+  DDug/Tiny SQuest deferred as "too complex" until now, converting to
+  flat `tmz*` functions operating on global state instead of a
+  `this`-bound object (the same treatment those three still-deferred
+  games will eventually need). Several of upstream's states were
+  themselves blocking multi-frame loops despite the outer structure
+  already being switch-based - the difficulty-select screen's own
+  `do {...} while(!isFirePressed())` plus an internal
+  `waitUntilButtonsReleased()` busy-wait, and the "hold Fire to flag, tap
+  to uncover" gesture's `do {...} while(isFirePressed())` hold-duration
+  timer - both converted to non-blocking per-frame edge-detection/tick-
+  counters, the same pattern established by NumberPlace's own
+  `NP_SHORT_PRESS`/`NP_LONG_PRESS`. Added one new shared shim primitive,
+  `isFire2Pressed()` (`tinyJoypadShim.h/.c`, backed by a new
+  `md_inputFire2()`/`bool gamepad_button_b()` in `machineDependent.h`/
+  `portVircon32.c`) - the first game needing Vircon32's B button, for an
+  instant flag-toggle alongside the long-press alternative (matching
+  upstream's own "count = isFire2Pressed() ? 255 : 0" trick, which forced
+  its long-press branch unconditionally rather than needing a second
+  gesture path). Upstream's 6 full-screen splash bitmaps (title, rules,
+  difficulty-select, boom, game-won, awesome) are RLE-compressed in
+  PROGMEM, a real AVR-flash-size concern this project doesn't share -
+  rather than port `uCompression.cpp`'s `pgm_RLEdecompress256()` codec at
+  runtime, all 6 were decompressed *once*, offline, via a small Node
+  script into flat 1024-byte arrays, verified byte-for-byte against the
+  decompression algorithm's own documented control-byte format (top 2
+  bits select literal-run/generic-repeat/repeat-0x00/repeat-0xFF, bottom
+  6 bits are the run length) rather than trusting a first attempt - two
+  real bugs were caught this way before the port ever compiled: a CRLF
+  line-ending bug in the extraction script's own comment-stripping regex
+  (JavaScript's end-of-line anchor not matching before a trailing `\r`
+  under Windows line endings - fixed by dropping the anchor), and an
+  incorrect assumed size for the dashboard
+  bitmap (512 vs the actual/correct 256 = 32px wide x 8 page-rows).
+  Also confirmed (by directly reading it) that upstream's hand-written
+  AVR-assembly decompression fast-path (`uDecompression.S`) is a 1:1
+  translation of the plain-C branch also present in the same file and
+  used only on non-AVR targets during upstream's own development/testing
+  - so no assembly semantics needed understanding or porting at all.
+  RNG: upstream's `seed`/`incrementSeed()` fields look like a bespoke
+  PRNG but are actually just an entropy source (incremented every idle
+  frame while polling for input, so `seed` captures "how long the player
+  took to press Fire"), fed once into stdlib `randomSeed()`/`random()`
+  right before mine placement - ported as a direct call to the shared
+  `arand(n)` helper instead, needing no such manual seeding ritual (same
+  reasoning as every other port here). The flood-fill `uncoverCells(x,y)`
+  is kept as upstream's own iterative "repeatedly rescan the whole board
+  until a pass finds nothing new" algorithm (its own comment explains
+  this was chosen specifically over a simpler recursive version to avoid
+  overflowing the ATtiny85's tiny stack - confirmed with a real
+  screenshotted stack-overflow bug in upstream's own README) rather than
+  rewriting it recursively, since Vircon32's ample stack removes the
+  original constraint but the iterative version is already correct.
+  **A real fire-input bug found via live Puppeteer testing**: confirming
+  a difficulty selection immediately, incorrectly uncovered the center
+  board cell too (`Clicks: 01` visible with zero actual player input in
+  the new PLAYING state) - the same physical button press that confirmed
+  DIFFICULTY was being read a second time as PLAYING's own edge-triggered
+  "tap to uncover" release gesture, since upstream explicitly busy-waits
+  for that confirming press to be *released* before ever entering the
+  play loop (a blocking mechanic this port's non-blocking edge-detection
+  didn't originally replicate). Fixed with a local fire-gate
+  (`tmzFireGateActive`, mirroring `md_armInputFireGate()`'s existing
+  menu-to-game handoff pattern but applied *within* a single game's own
+  state machine) - forcing `fire = false` both for every later tick while
+  the gate is armed *and*, critically, on the very same tick the gate is
+  armed (missed on the first attempt: forcing it only on later ticks left
+  `tmzPrevFire` still `true` from the arming tick, so the next gated
+  `fire=false` read was itself misread as a fresh release edge one tick
+  later, reproducing the identical bug). Verified fixed via screenshot
+  showing a fully-hidden fresh board (`Tiles: 96, Clicks: 00`) immediately
+  after confirming difficulty. Full gameplay verified live afterward
+  (Puppeteer + the WebGL build): cursor movement clamped correctly at all
+  4 board edges, quick-tap uncover with correct flood-fill, both flag
+  methods (`isFire2Pressed()` instant toggle and the long fire-hold,
+  each independently confirmed to add/remove a flag and update the
+  dashboard's flagged-count "Mines" field - which, per upstream's own
+  identical `getFlaggedTilesCount()`-driven dashboard call, tracks flags
+  *placed*, not mines remaining, so reading "00" on a fresh board is
+  correct/expected, not a bug), and the full BOOM_FLASH -> GAME_OVER
+  sequence (bomb reveal via `tmzUncoverCellsMask(TMZ_BOMB)`, inverted-
+  color board, held steady indefinitely without a confirming Fire press -
+  exactly matching the code's own no-timeout `TMZ_STATE_GAME_OVER`
+  branch). GAME_WON was not directly triggered during this session's
+  testing (an automated full-board clear got most of the way there on
+  Easy difficulty - down to a small, disconnected pocket the initial
+  flood-fill never reached - before time/effort budget on that specific
+  brute-force verification ran out) but was confirmed correct by direct
+  code inspection: `tmzIsWon()`'s check and the `TMZ_STATE_GAME_WON`
+  branch share the exact same render/sound/return-to-intro structure as
+  the already-empirically-verified `TMZ_STATE_GAME_OVER` branch, just
+  with different bitmap/sound assets.
+- `src/games/gameTinyMissile.c` - Tiny Missile (Daniel C, GPLv3, same
+  `tinyJoypadShim`/`FastTinyDriver.h` lineage). A Missile-Command-style
+  game: a crosshair fires interceptor rockets to destroy incoming
+  missiles before they hit one of 6 domes/cities; clearing every missile
+  advances the level, losing every dome ends the game. Picked as the next
+  lowest-effort Tier-2 candidate (goto=10) - but its own `CLASS_TMISSILE.h`
+  turned out to use *real* C++ classes with single inheritance
+  (`STATIC_SPRITE_ANIM_TMISSILE`/`CROSS`/`DEFENCE` all `: public
+  STATIC_SPRITE_TMISSILE`), a complexity the goto-count triage doesn't
+  capture (same blind spot that under-costed Tiny DDug earlier) - though
+  a much smaller, flatter hierarchy than TinyMinez's own classes, so still
+  tractable: flattened into plain structs with the base class's X/Y/ACTIVE
+  fields inlined directly into each derived type, methods becoming
+  `tmis*` functions taking an explicit pointer. `ARMY_TMISSILE::
+  ATTACK_WEAPON()`'s blocking rapid-fire burst (a missile got through to
+  the crosshair, auto-firing every remaining rocket) became a
+  `tmisAttackBurstActive` flag ticking one rocket per real frame, main
+  engine update skipped entirely while active (matching upstream's own
+  complete freeze during the burst). Genuine upstream whole-loop
+  `CONTROL_FRAMERATE(46)` throttle (~21.7fps) ported as a real
+  `TMIS_TICK_DIVISOR=3` (~20fps) tick-skip from day one, per this
+  project's own standing rule - the first port to actually follow that
+  rule at write-time instead of retrofitting it after a report.
+  **A cluster of real bugs found via live user play, in the order
+  reported**:
+  1. *"Explosions don't draw correctly"* - confirmed real: the interceptor
+     detonation-flash sprite was rendered with `tmisSpeedBlitz` (upstream's
+     own page-aligned blit, used correctly for the page-locked DOME
+     sprite) instead of `tmisBlitzSprite` (the pixel-space, sub-page-split
+     variant upstream *actually* uses for INTERCEPT, confirmed by re-
+     reading the `.ino` directly) - since an intercept's Y position is
+     inherited from the defence rocket's animated float pixel coordinate,
+     not a page index, the page-aligned bounds check was comparing
+     incompatible coordinate spaces and silently returning nothing for
+     most of the sprite's real vertical range. Fixed by switching the
+     call.
+  2. *"Sounds play too long"* - two compounding causes. First, the shared
+     frame-stepped note sequencer (same `tmisStartNoteSeq`/
+     `tmisAdvanceNoteSeq` shape as Arkanoid's/Minez's own) can only ever
+     advance one note per real 60fps frame - fine for a genuine melody,
+     but the win/game-over cues are *computed sweeps*
+     (`for(t=1;t<255;t++){Sound(50,2);Sound(t,2);}` and its mirror) with
+     508/380 notes each, meaning a literal port would take a *minimum* of
+     8.5/6.3 real seconds regardless of each note's own true duration -
+     upstream's version only finishes in well under a second because each
+     of its own Sound() calls is a genuinely *blocking* AVR bit-bang,
+     which Vircon32's fire-and-forget async audio channel has no
+     equivalent of. Fixed by downsampling the sweep's step size
+     (`t+=8`/`t-=8` instead of `t+=1`/`t-=1`) rather than reproducing every
+     literal step - same audible ascending/descending sweep effect,
+     landing in a duration comparable to Arkanoid's own ~46-note intro
+     jingle instead of a step count that was only ever fast because of
+     AVR's blocking audio model. Second, a `waitFrames<1 -> 1` minimum-
+     wait floor (copied defensively from Arkanoid's own sequencer) was
+     stretching this game's own very short UI blips (~1-2ms true duration)
+     out to at least a full 16.67ms frame each time - removed, since nothing
+     in the sequencer's own logic actually needed a nonzero floor to stay
+     safe.
+  3. *Dome-explosion sound retriggering every animation tick* - upstream's
+     `UPDATE_DOME_TMISSILE()` calls `SNDBOX_TMISSILE(5)` on all 6 ticks of
+     a dome's explosion animation, harmless there since each of its own
+     calls is a ~2ms blocking beep; ported verbatim, Vircon32's async
+     channel instead retriggered audibly on every tick, sounding stuck.
+     Fixed by sounding only on the tick the explosion actually starts
+     (`frame==1`), matching what a player perceives as one "boom" rather
+     than upstream's own AVR-inaudible repetition.
+  4. *"When our base gets hit, missiles/lives (ammo) suddenly all go to
+     0"* - a real burst-logic bug, not just the dramatic-but-correct
+     arsenal drain: upstream's `ATTACK_WEAPON()` only enters its
+     ammo-draining `while` loop if `ROCKET>0` *at the moment the burst
+     starts*, and `USE_WEAPON()`'s own auto-refill-from-`SPARE` keeps that
+     loop going until the *entire* arsenal (current clip + every spare
+     clip) is exhausted; if `ROCKET` was already 0 when hit, upstream
+     instead takes a single defensive shot straight from `SPARE`, no
+     refill. An early version of this port checked `rocket>0` fresh on
+     every tick instead of capturing "did we have rockets at burst-start"
+     once, so the barrage incorrectly stopped (and misreported the
+     single-shot sound) the instant the current clip ran dry mid-burst,
+     instead of continuing into the spare clips. Fixed with a
+     `tmisAttackBurstHadRocket` flag captured once in
+     `tmisAttackWeaponStart()`.
+  5. *"Seems to very easily hit 100% CPU constantly"* - this game's render
+     pipeline never got the per-row call-site gating/per-page-buffer
+     compositing pass every other tinyJoypadShim game here needed
+     (Bert/Doc/Tris/Arkanoid/Bomber/Pacman) - 7 composited layers called
+     unconditionally for all 1024 pixels/frame, several looping over
+     multiple objects internally (4 missiles, 6 domes, 3 defence, 3
+     intercepts), which had already caused a lower-severity symptom
+     (the crosshair/domes occasionally, transiently missing from an
+     otherwise-normal frame - game *state* untouched, just that one
+     frame's drawing cut short by the 250,000-cycle/frame budget) before
+     the user confirmed the CPU cost itself was the bigger problem. Fixed
+     in two rounds: first, row-gating each narrow-footprint layer's call
+     site (skip Dome/Cross/Shield/Intercept/Panel entirely on rows they
+     can't touch - Dome only row 7, Panel only row 0, the rest computed
+     from each object's own current position); second, converting each of
+     those into a `tmisComposite*Row()` function writing directly into a
+     shared `tmisPageBuffer[128]` for *just its own narrow column range*
+     (dome width 15, cross width 3, defence width 2, intercept width 10)
+     instead of scanning all 128 columns per object, plus the same
+     treatment for missiles (bounded to each one's own `[min(x1,x2),
+     max(x1,x2)]` span, usually far narrower than the full width since
+     it's set by the RDLP oscillator's own ~22-60px cycle) with a
+     guaranteed static skip of rows 0 and 7 (a missile's trail only ever
+     spans rows 1-6, `pixel-y=11` to `pixel-y=55`). No in-browser CPU%
+     measurement exists to confirm the final number - would need the
+     native desktop emulator's `performance-display` overlay - ask the
+     user to confirm in real play.
+  6. *(Later session, using the new WebGL perf overlay - see its own
+     section below) "the game seems to slow down when enemy missiles
+     reach near our bases"* - confirmed and measured directly: CPU load
+     climbed steadily over consecutive real seconds (roughly 5% -> 100%)
+     specifically as active missiles approached the bottom of their fall,
+     matching the report precisely. Root cause: `tmisCompositeLineRow(y)`
+     (round 5's own fix, above) still scanned a missile's *entire* trail
+     width (up to ~60 columns, its full `[min(x1,x2),max(x1,x2)]` span) on
+     every one of its active page rows, relying on `tmisTraceLine()`'s
+     own internal check to reject the columns that don't belong to that
+     row - and a missile's trail only reaches its full length (all 6 rows
+     simultaneously active) once it's nearly at the bottom, so the
+     wasted-call count peaks exactly when the missile is near a dome. Per
+     this project's own tenth lesson (a correctly self-gated function
+     still costs a full call every time it's invoked), rejecting ~85% of
+     those calls internally doesn't avoid their cost. Fixed by computing
+     each row's real matching column sub-range *directly*, analytically,
+     instead of discovering it by scanning: since the trail's geometry is
+     fixed (`y1=11`, `y2=55` always) and strictly linear, mapping the two
+     pixel-Y extremes of a given page row back to X via the same
+     `tmisMymap()` formula already used forward (just with X/Y swapped)
+     brackets the true matching range with a small margin for rounding -
+     typically only a handful of columns per row instead of the full
+     22-60px span, since the trail's dx/dy ratio (~0.5-1.4) means one
+     8px-tall row only ever covers a few columns' worth of horizontal
+     travel. New helper `tmisMissileRowXRange()`, used by
+     `tmisCompositeLineRow()` in place of its old full-span loop -
+     verified via the perf overlay that sustained load in the same "let
+     missiles fall to the bases unintercepted" scenario dropped from a
+     climb to 100% down to a 53-65% plateau, with trail rendering
+     confirmed pixel-correct (same diagonal lines, no gaps) and normal
+     gameplay (crosshair movement, firing, interception, score) unaffected.
+- `src/games/gameTinyBike.c` - Tiny Bike (Daniel C, GPLv3, same
+  `tinyJoypadShim`/`FastTinyDriver.h` lineage). A BMX/motocross side-
+  scroller: hold Fire to accelerate, tilt the wheelie angle (LEFT/RIGHT,
+  upstream `analogRead(A0)`) and change track lane/height (UP/DOWN,
+  upstream `analogRead(A3)`) to jump ramps and dodge oil slicks/holes
+  before the time bar runs out. Picked as the next lowest-effort untried
+  Tier-2 candidate (goto=11) after re-confirming via a header-grep across
+  every included file (not just the main `.ino`) that it has no hidden
+  C++-class complexity, the same triage gap that had under-costed Tiny
+  DDug/Missile earlier. Structurally straightforward once ported (no
+  blocking loops beyond the usual goto-chain and two real multi-tone
+  sound sequences) but surfaced three genuine **dialect-support
+  discoveries**, each a first for this project rather than a bug in the
+  upstream game itself: binary literals (`0b00000011`) aren't accepted by
+  this compiler ("bad floating point literal") - rewritten as decimal with
+  a `// 0bNNNNNNNN` comment preserving the original intent; the ternary
+  operator (`a?b:c`) isn't accepted either ("character '?' is not a valid
+  identifier start") - rewritten as plain `if`/`else`; and `switch`/`case`
+  was avoided proactively rather than being the first port to test
+  whether the dialect supports it at all (matching Tiny Doc's own already-
+  documented caution) - upstream's own six `switch` blocks (background
+  tile dispatch, jump-height lookup, collision-type dispatch, map-byte
+  splitting, sprite-type dispatch, `Tiny_Flip`'s own mode dispatch) all
+  became `if`/`else if` chains instead. Data tables extracted from
+  `spritebank.h` with a small Python script (parsing the real `PROGMEM`
+  array literals directly, not hand-retyped) - every table's element
+  count verified against the script's own parse, the same anti-Bomber-
+  bug technique used for Doc/Bert/Minez/Bike's own dead-data audit (see
+  below). Two blocking multi-tone sound sequences (a 3-beep countdown
+  with real `_delay_ms(400)` gaps between beeps, and a 5-pair win
+  fanfare) converted to a small frame-stepped note sequencer matching
+  Arkanoid/Missile/Minez's own shape, extended with a per-note `extraMs`
+  field specifically to reproduce the real delay gaps between the first
+  three countdown beeps (every prior sequencer in this project only
+  needed each note's own natural duration, no separate silence gap after
+  it). Applied the VRAM-persistence lesson **from the start**: upstream's
+  `Tiny_Flip(MODE)` has its own `PRINT`/`PRINT2` partial-row table (mode 0
+  skips row 7, mode 1 skips rows 0-1, alternated every real gameplay frame
+  via `Tiny_Flip(FOUL_BLITZ)`) - the exact same "assumes real SSD1306 VRAM
+  persists the skipped rows" pattern already found and fixed in Pinball/
+  Doc/Bert - `bikTinyFlip()` always redraws all 8 rows regardless of mode,
+  avoiding the bug proactively instead of needing a later fix. Also
+  dropped several genuinely-dead upstream elements found while porting
+  rather than porting them verbatim: `BigStepB`/`MinijumpB` (declared in
+  `spritebank.h`, never referenced anywhere in the `.ino`), `DScroll0`/
+  `BScroll0` (declared, never used), `RECUPE_Y_SPRITE()` (defined, never
+  called), and `Sprite2PAINTinBLACK` (reset then only ever read inside the
+  exact same statement that would set it, so it can never actually
+  influence control flow beyond the sprite-hit check it's OR'd with).
+  Verified via extended Puppeteer play: attract screen, level-intro
+  picture display, the start-line countdown sequence, active gameplay
+  (acceleration, wheelie tilt, lane changes, scrolling parallax
+  background/HUD bars, obstacle sprites, ramp jumps), and a deliberate
+  crash scenario (holding the wheelie-up input continuously until
+  `Wheel_up` maxed out) correctly decrementing lives (helmet icons
+  visibly dropping from 3 to 1) with continued playable recovery
+  afterward and no crashes/hangs. Win-state (reaching the finish line) and
+  the exact game-over-to-attract transition were not specifically forced
+  in this session's testing - lower risk than the already-verified crash
+  path since both reuse the same wait-state machinery already exercised,
+  but worth a specific check in a future session if time allows.
+  **CPU-load pass, requested right after shipping**: measured first with
+  the perf overlay rather than guessing - gameplay CPU was pegged at a
+  steady 100% throughout. Root cause was the exact same O(pixels x
+  objects) shape already fixed in Bomber/Pacman/Doc/Bert, just never
+  applied here since Bike only ever has at most 2 obstacle sprites (looked
+  low-risk enough to skip at ship time, incorrectly - 2 sprites x calling
+  `bikBlitzSprite()` for all 1024 pixels/frame each is still 2048+ wasted
+  calls, before even counting the bike's own sprite). Fixed both call
+  sites: `bikBikeSprite()` (the player's own sprite, fixed x in [24,36]
+  since its xPos is hardcoded to 24 in upstream's own call site - gated
+  there, cutting its call count by ~90%) and `bikBlitzSpriteMap()`
+  (rewritten as `bikCompositeSpriteMapRow(y)`, composited once per page
+  row into a shared `bikSpritePageBuffer[128]` by walking only the up-to-2
+  active obstacle sprites and writing just their own narrow column range,
+  preserving the original per-pixel "first active sprite with a nonzero
+  pixel wins" priority order by only writing a column that isn't already
+  set). Verified two ways: (1) an extended play session including a full
+  crash-and-recovery *and*, incidentally, a complete game-over-to-attract-
+  to-restart cycle (not specifically forced in the initial port's own
+  testing) rendered correctly throughout, with no regressions in obstacle
+  sprites, the bike's own animation, or draw priority between overlapping
+  sprites; (2) measured before/after with the perf overlay on the same
+  input sequence - CPU dropped from a steady 100% to a 79-96% range.
+- `src/games/gameTinyArena.c` - Tiny Arena (Daniel C, GPLv3, same
+  `tinyJoypadShim`/`FastTinyDriver.h` lineage). A DOOM-style raycaster
+  arena shooter - rotate/move with the d-pad, shoot tentacle enemies with
+  Fire before they reach you, survive as long as possible. Picked
+  deliberately, when asked to bring TinyDungeon back into scope, as a
+  stepping stone instead: this project's **first raycaster port**, proving
+  the technique out on a plain (non-C++-class) game before attempting the
+  much bigger TinyDungeon (a C++-class raycaster with combat/dice/
+  inventory on top of it) in a future session - my own judgment call,
+  not something explicitly requested, made because de-risking the
+  raycasting technique first seemed clearly lower-risk than tackling both
+  the C++-conversion and raycasting problems at once.
+  **Key architectural finding**: despite being a raycaster, this game
+  needed no new machineDependent primitives at all. Upstream never writes
+  real pixels - it renders into a *half-resolution* 64x32 monochrome
+  buffer (`VBuffer[4][64]`) and its own `Tiny_Flip()` doubles that buffer
+  2x both ways to fill the real 128x64 display (horizontally by writing
+  each output byte twice, vertically via a nibble-expansion lookup table).
+  The exact same "compute a byte value per real (column,page), call
+  `md_drawColumn()`" model already used by every other port here covers
+  this without changes - `arTinyFlip()` just derives that byte differently
+  (via the half-res buffer + nibble expansion) instead of reading a
+  pre-baked column-atlas byte. This meaningfully de-risks TinyDungeon for
+  a dedicated future session instead of leaving it permanently shelved.
+  Dialect issues hit (all already-known findings from earlier ports, none
+  new): no `static` locals (two upstream statics hoisted to file-scope
+  globals - one relying on `uint8_t` wraparound, fixed with an explicit
+  `& 0xFF` mask, the same lesson as HollowSeeker's cave-phase counter);
+  no ternary operator (rewritten as `if`/`else`); no `fabsf()` (only a
+  float-only `fabs()`, used instead - the same operation here since this
+  game's usage is already all-float). A genuine upstream off-by-one was
+  also found and fixed by inspection (not by a crash): `isWall()`, the DDA
+  loop's out-of-map check, and the enemy-respawn validity check all
+  bounds-checked against `>= 10`, but `Lvl1` is declared `[9][9]` (valid
+  indices 0-8) - harmless on real AVR (silent PROGMEM overrun), but risky
+  on Vircon32 (a real out-of-bounds array read) - fixed by using the
+  correct bound (9) at all three sites.
+  **Three bugs found via direct user play-testing, each fixed in turn**:
+  (1) up/down movement was inverted - a straightforward transcription
+  error (upstream's `isDownPressed()`/`isUpPressed()` swapped from the
+  established A0/A3 mapping), fixed by swapping the two conditions and
+  verified via screenshot showing the perspective correctly closing on a
+  wall after pressing UP. (2) A user question ("does this game only
+  display the text 'START' on its titlescreen?") led to noticing an
+  unrelated real bug while investigating: the game-over screen rendered
+  with a BLACK background instead of upstream's intended WHITE one, since
+  Vircon32 zero-initializes globals (not `0xff`) and the port's state
+  machine never replicated upstream's "clear VBuffer to `0xff` once,
+  exactly when entering the game-over sequence" behavior - fixed with a
+  new `arClearBufferWhite()` helper called at the
+  `WAIT_RELEASE`->`BLINK` transition, verified via screenshot. (3) A
+  runtime "ERROR: INVALID MEMORY READ" crash, root-caused via the
+  `assemble -g program` debug-info technique (see Tiny Bomber's own
+  writeup for the technique's first use) directly to the game-over blink
+  state's `arVBuffer[2][19+i] = ~bit;` line - `~bit` on a small value sets
+  all 32 bits (Vircon32 has no implicit byte truncation the way AVR's
+  `uint8_t` gave upstream), later feeding a huge value into
+  `arSliceByte()`'s unmasked `data >> 4` nibble extraction and reading
+  `arExpand[16]` far out of bounds. Fixed the same way this project's
+  very first byte-truncation bug fixed `md_drawColumn()`: an explicit
+  `& 0xFF` mask at the specific site, plus a second defensive mask added
+  centrally inside `arSliceByte()` itself (every `arVBuffer` read funnels
+  through there, so this is the one place that needs to guard against a
+  stray out-of-range value regardless of which call site produced it).
+  **Performance investigation, requested directly** ("can this game be
+  optimized when enemy is very near the player performance tanks"):
+  `arDrawWorldSprites()`'s per-stripe, per-row inner loop was recomputing
+  `texY` (and everything derived from it - the texture row-byte offset,
+  page, bit mask) from scratch, including a real division, for every one
+  of up to 64x32=2048 pixels when a close enemy fills most of the screen -
+  precomputed once per row instead (at most 32 rows), cutting the division
+  count from up to 2048 to at most 32 per sprite per frame. A second pass
+  found that when the sprite is scaled up past 1x (exactly the "enemy very
+  near" case), many consecutive destination columns map to the *same*
+  source texture column - cached each run's per-row white/black
+  classification once (`colDraw[32]`) instead of re-reading the sprite
+  data for every stripe in the run. Measuring this properly required a
+  more rigorous debug-hook technique than earlier sessions' one-shot spawn
+  overrides: continuously re-freezing the enemy's position to a fixed
+  offset from the player *every tick* (undoing the chase AI's own movement
+  each frame), eliminating the "enemy keeps closing distance during the
+  test" noise that made earlier one-shot-override comparisons
+  inconclusive. At a stable frozen distance of 0.5 (close, sprite filling
+  much of the screen, safely outside the contact-damage radius): baseline
+  was a rock-steady, saturated 100% CPU; the optimized version was a
+  rock-steady 97% - a real, clean, unambiguous, repeatable improvement,
+  moving this scenario from over-budget (risking frame truncation) to
+  under-budget. (At a frozen distance of 2.5, both versions read an
+  identical, stable 65% - correctly showing no benefit when the sprite is
+  small enough that the redundancy doesn't matter, a useful negative
+  result confirming the fix's benefit is real and distance-dependent, not
+  a measurement artifact.)
+  **A further audit, requested directly** ("any more 'clear'
+  optimizations you can see for this game"), found two more real issues:
+  (1) `arVBuf(x,y)` - the single-bit wall-dither/border helper in
+  `arRenderRaycast()` - was called via a real function call up to ~50
+  times per column when a wall fills the whole 32-row screen height
+  (standing close to a wall, the direct analogue of the already-fixed
+  "enemy very near" case, up to ~3200 calls/frame worst case across all 64
+  columns). Inlined directly into its 3 call sites, the same technique
+  already used for Tiny Trick's own background-lookup inlining - measured
+  with the perf overlay at a fixed close-wall distance: 69% -> 64% CPU, a
+  real, repeatable drop, with rendering confirmed pixel-identical. (2) The
+  death sequence's own sound effect - upstream's `for(t=220;t>3;t--)
+  Sound(t,2);` - fires ~217 `Sound()` calls synchronously within a single
+  frame. Harmless on real AVR hardware (each call blocks for a genuine but
+  tiny slice of real time, so the whole sweep audibly finishes in well
+  under a real frame), but Vircon32's async audio channel has no queue -
+  `md_playTone()` unconditionally stops whatever the previous call started
+  before beginning the new tone - so 217 calls issued with no real time
+  between them can only ever be *heard* as the very last call's tone (an
+  inaudible click), while still costing 217 real
+  `playnote_start()`/`stop_all()` invocations in a single frame for an
+  effect nobody perceives. Same root cause as Tiny Missile's own computed-
+  sweep bug. Fixed with a new frame-stepped `arAdvanceDeathSweep()`
+  (called unconditionally once per real frame, independent of `arState`,
+  since the state machine moves on to the game-over wait state the very
+  next frame), with a downsampled step (30 instead of 1) so the sweep
+  still finishes in a short handful of frames rather than stretching
+  upstream's near-instant zap out to a full ~3.6 real seconds. `min()`/
+  `max()` were also checked as candidates and ruled out - both already
+  compile to a single hardware instruction each (`imin`/`imax` via the
+  Vircon32 math library's own inline asm), so there was no further call-
+  overhead win available there.
+  Verified via Puppeteer throughout: normal gameplay (movement, shooting,
+  enemy AI, kills/respawns), a forced-death sequence (health temporarily
+  set to 1 with the enemy forced adjacent, to reliably reach the game-over
+  transition, then reverted), and a soak test spanning a full play session
+  - all render correctly with no regressions from any of the fixes above.
+  Also added the standing per-port menu thumbnail: a real gameplay
+  screenshot (the raycast corridor with dithered walls and the gun
+  sprite), composited into the 4x4 thumbnail grid's cell 15 - the last
+  previously-free cell (`THUMBNAIL_COUNT` bumped 15->16) - verified via
+  screenshot that it displays correctly and neighboring thumbnails are
+  untouched.
+- `src/games/gameTinyGilbert.c` - Tiny Gilbert (Daniel C, GPLv3, same
+  `tinyJoypadShim`/`FastTinyDriver.h` lineage). A side-scrolling
+  platformer - run left/right, jump gaps and hazards, collect all of a
+  level's keys, then reach the door to advance across 10 levels with 7
+  lives. Picked as the next port: the lowest `goto` count (7) of any
+  untried title, on the already-proven shim lineage, confirmed via a
+  fresh per-header `class ` grep to have no hidden C++ complexity.
+  Structurally straightforward (a single `RESTARTGAME:`/`RESTARTLEVEL:`/
+  `NEXTLEVEL:` goto-chain, the same shape already established) but with
+  one genuinely new wrinkle: upstream's own `FPS_Control` is a real
+  ~40fps whole-loop throttle (matching NumberPlace/HollowSeeker/t2048/
+  Doc's "genuine fixed real-rate" category) - but unlike those games, 40
+  does not evenly divide Vircon32's 60fps engine rate. Solved with **a
+  new technique for this project**: a Bresenham-style accumulator
+  (`gilbTickAccum += 40; if >= 60 then -= 60 and run one tick`) producing
+  exactly 40 ticks per 60 real frames long-term, instead of the plain
+  integer-divisor counter every earlier "genuine rate" game could use.
+  The intro jingle's `sound(2)` (`for(t=255;t>2;t--) Sound(t,1);`, ~253
+  notes) is the same class of bug as Tiny Arena's death sweep and Tiny
+  Missile's computed sweeps - converted to a downsampled (~18-note)
+  frame-stepped sweep proactively, from the start. Two genuine out-of-
+  bounds risks were found and fixed by inspection before ever compiling:
+  `delKey()`'s search loop scanned 3 slots past its own 20-slot array
+  (harmless on AVR's flat memory, fixed to the correct bound), and
+  `CollisionCheck()`'s 4x4 neighborhood scan could index 1-2 rows outside
+  the 8-row grid (`gridV` is transiently -1 inside `JumpProcedure()` and
+  7 inside `GravityUpdate()`, before each function's own later checks
+  correct it) - fixed with an explicit bounds guard. Data tables
+  extracted from `spritebank.h` via a Python script; the first extraction
+  pass didn't strip `/* */` block comments (only `//` line comments), so
+  the `/*0*/`.../*12*/` index markers embedded inside `map1coucheN[]`'s
+  array literals were parsed as extra data values (65 read instead of the
+  real 52) - caught by checking the extracted count against a manual
+  source read before the data was ever used, fixed by also stripping
+  block comments.
+  **Two real bugs found via direct, live user play, right after
+  shipping** (the user was actively testing while this port was still
+  being finished, catching both within minutes of each report):
+  1. "starting a game i don't see a player nor can i seem to be able to
+     do anything" - the player sprite was permanently invisible.
+     Root cause: upstream's `uint8_t visible=1;` is a non-zero global
+     initializer, but Vircon32 zero-initializes globals - the ported
+     `gilbVisible` defaulted to 0, and since it only ever toggles once
+     the player takes damage (via the injury-blink counter), the
+     sprite's own driftBL/BR/TL/TR values (computed each tick from
+     `gilbVisible`) stayed in the "invisible" branch indefinitely from a
+     fresh boot. Fixed with an explicit `gilbVisible = 1;` in
+     `gameTinyGilbert_init()`. A more thorough per-global initializer
+     audit (checking every upstream global with an explicit non-zero
+     value against its ported counterpart) confirmed this was the only
+     one missed - every other non-zero upstream initializer (`LorR=1`)
+     was already correctly re-applied via `ResetVarNextLevel()`.
+  2. "when i finished level 1, level 2 started but the player spawned
+     inside a block and kept dying" (later: "i also spawned in a spike
+     already on level 3") - a real, more serious bug, and initially a
+     red herring: my first hypothesis (checked directly against the
+     actual level 2 tile data via a small Python simulation of the exact
+     lookup math) was that the fixed spawn coordinates might literally
+     overlap a solid tile in some levels' layouts - disproven, the
+     tile at the spawn cell itself was empty. The real cause needed
+     re-reading upstream's *goto-chain structure*, not just the
+     `NextLevel()` function it calls: `NextLevel()` itself doesn't reset
+     the sprite's position (matching what got ported), but every path
+     that reaches it is immediately followed by `goto NEXTLEVEL;`, and
+     the shared `NEXTLEVEL:` label *unconditionally* calls
+     `SpriteShiftInitialise()` right after - regardless of whether that
+     label was reached from a fresh game, a retried level after death, or
+     completing a level via the door. The port had correctly wired the
+     first two paths (both already went through a shared
+     `gilbBeginLevel()` that resets position) but the door-completion
+     path called `gilbNextLevel()` directly, skipping the reset entirely
+     - so the sprite's grid position simply carried over unchanged from
+     wherever it happened to touch the previous level's door, which the
+     next level's own layout has no reason to keep safe. Fixed by folding
+     `gilbSpriteShiftInitialise()` into `gilbNextLevel()` itself (its only
+     two call sites). Verified two ways: (1) a temporary debug hook that
+     bypassed the key-collection requirement (`hitDoor && 1 /* ... */`)
+     to quickly reach real doors via actual play, confirming the fix
+     compiles and the game keeps running; (2) a more targeted test -
+     simulating three consecutive door completions from a fresh boot to
+     land directly on level 3 (matching the user's own report) - showed
+     the player spawning cleanly on a safe platform at the fixed (11,3)
+     position rather than embedded in level 3's own terrain. Both
+     temporary debug hooks were fully removed afterward and the fix
+     re-verified on the clean build.
+  Also added the standing per-port menu thumbnail - since the existing
+  4x4 grid (16 cells) was already exactly full going into this port (the
+  16th game, Tiny Gilbert, is registration index 16, one past the last
+  filled cell), the atlas canvas grew a 5th row (1024x512 -> 1024x640,
+  still comfortably inside Vircon32's 1024x1024 texture cap) rather than
+  needing a full grid reshuffle - `THUMBNAIL_GRID_ROWS` bumped 4->5 and
+  `THUMBNAIL_COUNT` bumped 16->17, with the new thumbnail composited into
+  the new row's first cell. Verified via screenshot that it displays
+  correctly and every existing thumbnail (spot-checked Tiny Doc) is
+  untouched.
+- `src/games/gameTinyPipe.c` - Tiny Pipe (Daniel C, GPLv3, same
+  `tinyJoypadShim`/`FastTinyDriver.h` lineage). A Mappy/Pengo-style
+  single-screen platformer - bounce on the pipework to knock turtles
+  over from below (via a bump indicator or an "earthquake" stomp), then
+  walk into a stunned turtle to kick it off for points; touching an
+  un-stunned turtle costs a life. `CLASS_TPIPE.h` declares two real C++
+  classes, but a small, flat inheritance step (`PASIVE_SPRITE_TPIPE` base
+  + `SPRITE_TPIPE : public PASIVE_SPRITE_TPIPE`) - the same tractable
+  shape already solved for Tiny Missile's own class header, confirmed via
+  a fresh per-header `class ` grep before committing, rather than the
+  harder full-hierarchy complexity that keeps TinyDungeon/SQuest/DDug
+  deferred. Flattened into one `TpipeSprite` struct with plain `tpipe*`
+  functions taking an explicit pointer, matching Missile's own precedent.
+  Every intra-function `goto` used as a structured-control-flow shortcut
+  (a "continue" via `goto SKIPP_`, an early-exit-past-cleanup via
+  `goto EnD_`, etc.) was rewritten with plain `if`/`else`/`continue`
+  rather than tested verbatim - lower-risk than being the first port here
+  to exercise intra-function goto/label control flow, as opposed to the
+  already-proven outer-loop state-dispatch `goto` shape every other port
+  uses. `Trace_LINE`/`DIRECTION_LINE`/`Return_Full_Byte`/
+  `RECONSTRUCT_BYTE` (a line-drawing primitive) and the `DEBOUNCE` macro
+  are declared in `ELECTROLIB.h` but never actually called anywhere in
+  the game logic - confirmed by grep before dropping them as dead code.
+  **The largest computed sound sweep found in this project yet**:
+  `SND_TPIPE(1)` (played on player death) is a *nested* loop
+  (`for(e=0;e<100;e+=20){for(r=e;r<e+100;r++){Sound(255-r,2);}}`) firing
+  **~500** `Sound()` calls synchronously - bigger than Tiny Missile's own
+  508-note sweeps in the same ballpark. Same root cause/fix as every
+  other one of these: converted proactively, before ever compiling, to a
+  downsampled (~15-note) frame-stepped descending sweep. `switch`/`case`
+  avoided proactively throughout (matching Tiny Doc/Bike's established
+  caution) - including a genuine multi-case fall-through (bonus-life
+  levels 2/5/8/11/14/17 all sharing one action), rewritten as one
+  `||`-chained `if`. `SND_TPIPE`'s own case 4 is never called from
+  anywhere - confirmed dead and dropped.
+  **A genuine logical-vs-arithmetic-shift bug, the same class already
+  found in HollowSeeker**, caught by inspection before compiling:
+  `ELECTROLIB.h`'s `RecupeLineY(int8_t Valeur){ return (Valeur>>3); }`
+  is fed genuinely negative `yPos` values (turtles spawn at y=-3) -
+  AVR-GCC's `int8_t >>` sign-extends (arithmetic shift, giving the
+  correct floor-division result), but Vircon32's `>>` is a documented
+  *logical* (zero-fill) shift. Fixed the same way as HollowSeeker's own
+  `hsDivByColumnW`: branch on sign, only ever shift a non-negative
+  operand (`-((-val+7)>>3)` for negatives). `RecupeDecalageY()` (also fed
+  negative values) was derived directly from the now-safe line-Y helper
+  instead of its own separate shift trick, avoiding a second site with
+  the same risk.
+  **The upstream `Tiny_Flip_TPIPE()`'s own `FLIP_MODE_` parameter maps to
+  a column width of 128 or 110** - but the *only* real call site in the
+  whole game (`Tiny_Flip_TPIPE(0)`, every real gameplay frame) always
+  resolves to **110**, meaning columns 110-127 (18 of 128) were never
+  redrawn during actual play - the same "real SSD1306 VRAM persistence"
+  assumption already found and fixed in Pinball/Doc/Bert/Trick, newly
+  discovered here and fixed proactively rather than retrofitted after a
+  report. This also exposed a genuine latent out-of-bounds risk in the
+  earthquake screen-shake effect (a shifted column could reach 128,
+  past the background array's real 127 bound for a given row) - fixed
+  with an explicit clamp. Also caught by inspection: `FADE_TPIPE()`'s own
+  9-step fade mask (`0xff << (8-l)` / `0xff << l`) relies on AVR's
+  implicit `uint8_t` narrowing to stay within a real byte - on Vircon32's
+  full-width `int` shift, `0xff << 8` is `0xFF00`, not 0, which would
+  silently zero out every masked pixel; fixed with an explicit `& 0xFF`
+  on the computed mask, the same byte-truncation-reliant-trick class of
+  bug as Tiny Arena's own VSlide fix.
+  `FADE_TPIPE()`'s real 9-step, `_delay_ms(20)`-per-step blocking loop was
+  converted to a shared `tpipeAdvanceFade()` helper (one step per real
+  engine frame - the whole transition was already only ~180ms real time
+  upstream, so this is a close match) reused via its own dedicated state
+  at every fade-in/fade-out call site, and `NEXT_LEVEL_TPIPE()`'s two
+  `_delay_ms(250)` calls became plain frame countdowns - the same
+  "blocking loop -> explicit resumable state" treatment every port here
+  needs, just with more states than usual (this game has more distinct
+  blocking pieces than most) to cover each piece individually.
+  **Checked proactively against the quit-dialog onResume audit before
+  shipping** (see that section's own writeup below) rather than waiting
+  for another report: `TPIPE_STATE_INTRO_WAIT_RELEASE` has no timer of
+  its own (real, indefinite risk) and the level-load states can last a
+  couple of seconds (bounded, fixed for consistency) - both wired to
+  `gameTinyPipe_forceRedraw()`. Splitting the level-number digit draw
+  into a draw-only half (`tpipeDrawLevelDisplay()`) separate from the
+  digit-counter advance (`tpipeUpdateDigital()`) was necessary here
+  specifically so the forced redraw could safely repeat the draw without
+  also advancing the level-number digits a second time.
+  **A real bug in that exact split, found via direct user report**
+  ("when i press enter on the 'levels: 01' screen... choose no it
+  displays level: 02") - the same root-cause *shape* as Tiny Bike's own
+  "NEXT RACE" bug from earlier this session, just via a different
+  mechanism. Upstream's own `DRAW_LEVEL_TPIPE()` draws the *current*
+  digits, then immediately advances them (a genuine, correct "prepare the
+  next level's display" pattern) - all in one call, at the
+  `WAIT1`->`MUSIC` transition. The split avoided a *second* advance on a
+  forced redraw, but didn't account for the *first* advance already
+  having happened by the time that forced redraw could fire in the
+  `MUSIC`/`WAIT2` states - `tpipeDrawLevelDisplay()` was still reading
+  the *live* `tpipeGP.digit1/digit2` fields directly, which are already
+  the *next* level's values one call after the real draw, not what's
+  still genuinely on screen. Diagnosed by code inspection alone (no
+  testing, per the user's own request) by tracing exactly when
+  `tpipeUpdateDigital()` runs relative to every place that could redraw
+  afterward. **Fixed** by freezing what was actually just drawn into a
+  dedicated `tpipeShownDigit1`/`tpipeShownDigit2` pair at the one real
+  draw call site, with `tpipeDrawLevelDisplay()` reading those instead of
+  the live, already-advanced GP fields - any later forced redraw (real or
+  not) now always reproduces the exact digits genuinely on screen,
+  regardless of how far the live counters have since advanced.
+  **Generalizable lesson, same family as the Tiny Bike case**: splitting
+  a draw-plus-mutate function to make a repeated redraw safe only removes
+  the *second* mutation - it doesn't restore the *original* pre-mutation
+  values if the single legitimate mutation already ran before the redraw
+  fires. Any "redraw the same screen again" hook needs to redraw from a
+  frozen snapshot of what was actually shown, not from whatever mutable
+  state the draw function *used to* read, if that state can advance
+  again before the hook fires.
+  **Data tables extracted via Python script - two real transcription
+  errors found and fixed before ever measuring performance**: the first
+  hand-copy of the `MAIN_TPIPE` player-sprite table had one extra trailing
+  value (45 instead of the correct 44), and separately the two large
+  1024-byte raw-framebuffer tables (`BACKGROUND_TPIPE`/`TITLE_TPIPE`) each
+  had at least one wrong byte from manual transcription - caught by
+  writing a small script that re-parsed *every* array in the finished
+  game file and diffed it value-by-value against the original extraction
+  output (not just trusting a first eyeballed copy), the same "byte-diff
+  transcribed tables" technique this project established after Tiny
+  Bomber's own dropped-byte bug. Both large tables were then replaced
+  programmatically (regenerated from the verified extraction, not
+  hand-fixed byte-by-byte) rather than trying to spot individual errors
+  in 1024-value arrays by eye.
+  **CPU-load pass, requested directly after a soak test caught a
+  genuinely truncated frame** (a screenshot showing only the top page
+  rows drawn before cutting to black - this project's own documented
+  over-budget failure signature) - measured with the perf overlay rather
+  than assuming: gameplay CPU was pegged at a steady 100%. Root cause was
+  the by-now-familiar O(pixels x objects) shape: the player and all 4
+  turtles were each composited via a full per-pixel call (`tpipeMainBlitz`/
+  `tpipeSpritesTurtle`, the latter also looping over all 4 sprites
+  internally on every one of 1024 pixels/frame). Fixed the same way as
+  Bomber/Pacman/Bert/Doc: composite each sprite once per page row (8x/
+  frame) into a shared buffer, over only its own real column footprint.
+  The row-membership gate used (`recupeLineY <= y <= recupeLineY+1`) is
+  not an approximation - it's the exact range `tpipeBlitzSprite()` already
+  checks internally (both sprites' own HSPRITE field is 1), so this cuts
+  wasted calls without changing output, the same "self-gating still costs
+  a full call every time it's invoked" lesson applied elsewhere. Verified
+  two ways: (1) the perf overlay showed CPU drop from a steady 100% to a
+  stable 67% on the same input sequence; (2) a full soak-test re-run
+  showed every previously-truncated frame now rendering completely (the
+  player, all visible turtles, and the power indicator all present),
+  confirming the fix addressed the actual truncation, not just the
+  measured percentage.
+  **Frame-pacing, added later by direct request** ("limit tinypipe to
+  30fps including its logic"): upstream itself has no genuine real-time
+  throttle at all (the "no timing model" category, same as Trick/
+  Invaders/Pinball/Bert/Tris/Arkanoid in this project's own frame-pacing
+  survey), so this was a deliberate slowdown rather than restoring an
+  original rate. Added a whole-function `TPIPE_TICK_DIVISOR=2` tick-skip
+  gating the entire top of `gameTinyPipe_update()` - the same shape as
+  NumberPlace/HollowSeeker/t2048/Doc/Pacman's own throttle (not the
+  movement-only/redraw-stays-60fps shape used for Trick/Invaders/
+  Pinball/Bert), since "including its logic" specifically calls for the
+  whole tick to slow down, not just the redraw. Every existing tick-
+  counted wait constant in the file (`tpipeWaitFrames`, `tpipeIntroBlinkT`,
+  the fade-step counters) was left unrescaled, matching this project's
+  own standing "one divisor, no dual bookkeeping" practice - they simply
+  now take twice as long in real time.
+- `src/games/gameTinyMorpion.c` - Tiny Morpion (Daniel C, GPLv3, same
+  `tinyJoypadShim`/`FastTinyDriver.h` lineage - this game's own
+  button-threshold `#define`s live in its own `spritebank_TMORPION.h`
+  rather than `ELECTROLIB.h`, unusual for this project but confirmed to
+  match every other Daniel-C game's real A0/A3 thresholds regardless). A
+  tic-tac-toe game against a CPU opponent with 3 difficulty levels (EASY/
+  HARD/BRAVE), best-of-9-rounds match. Confirmed via a fresh per-header
+  `class ` grep (no C++ complexity hiding anywhere, unlike Tiny Pipe/
+  Missile/Minez) before committing to the port. `BOARD[3][3]` (accessed
+  both 2D and via a flat `uint8_t*` alias upstream) flattened to a single
+  `int[9] tmorpionBoard`. The difficulty-select menu and gameplay
+  `goto`-chains became an explicit state machine, same approach as every
+  other port here; `BLINK_WINNER_TMORPION()`'s real 10-iteration blocking
+  blink (every mark belonging to the winning player, not just the 3 in
+  the line) and `NULL_GAME_TMORPION()`'s 30-iteration draw "buzz" each
+  became their own frame-stepped sub-state. **The largest dual-tone
+  computed sound sweep found in this project**: `SND_BOX_TMORPION(5)`
+  (CPU wins the whole match) fires 380 synchronous `Sound()` calls
+  (`for(t=200;t>10;t--){Sound(200-t,3);Sound(t,12);}`) - downsampled to a
+  step of -15 (~13 dual-tone steps) rather than reproduced verbatim, same
+  fix shape as every other computed sweep found here. `switch`, ternary,
+  binary literals, and intra-function `goto`-as-control-flow were all
+  avoided proactively throughout (several genuine GCC case-range
+  extensions rewritten as `if`/`else if` chains) - `CPU_DOUBLE_TMORPION()`
+  and `ELECTROLIB.h`'s own dead line-drawing primitives
+  (`Trace_LINE`/`Mymap`/etc, confirmed never called, same as Tiny Pipe's
+  identical header) were dropped rather than ported. `rand()%3`/`rand()%4`
+  in the CPU's random-move fallback and its symmetric-position-replicate
+  heuristic switched to the shared `arand(n)` helper.
+  **A subtle cursor-rendering trick worth remembering for any future
+  board-game port**: the in-game cursor has no sprite of its own - frame
+  index 2 of the board sprite tables (the same index used for "genuinely
+  empty, no mark" everywhere else) is reused as the cursor-position
+  graphic. A non-cursor cell skips drawing entirely when empty (matching
+  every other game's "return 0 means background shows through"
+  convention), but the cursor's *own* cell never takes that shortcut - the
+  sprite lookup always runs, using either the real cell content (blink-off
+  phase) or a forced value of 2 (blink-on phase). The practical effect:
+  hovering an empty cell shows the cursor steadily (both phases resolve to
+  frame 2), while hovering an already-marked cell visibly blinks between
+  the real mark and the cursor graphic. Ported as the original two-branch
+  structure rather than simplified, since the branches are not equivalent.
+  A minor, deliberate, documented simplification: upstream's own win-check
+  loop doesn't `break` after a non-terminal win, so one move completing
+  two lines at once could double-increment the win counter upstream (an
+  instant re-entrant function call there) - since this port's win
+  resolution is now a genuine multi-frame animated state, not re-enterable
+  the same way, it resolves at most one winning line per move instead.
+  **Two live bugs found and fixed via direct code inspection, per the
+  user's explicit "check code, don't test" instruction, using the WebGL
+  perf overlay only after the fact to confirm rather than to diagnose**:
+  the user reported switching difficulty on the title screen spiking CPU
+  to 100%. Reading `tmorpionRecupeBack()`/`tmorpionDisplay()`/
+  `tmorpionMenuFlip()` directly (not by testing first) found two
+  instances of this project's own established "a self-gated function
+  still costs a full call every time it's invoked" pattern (see
+  Arkanoid/Bert/Tris/Trick's own history above), plus one call that was
+  provably wasted on *every* frame with no dependency on game state at
+  all: (1) `tmorpionPolice`'s own sprite height is 1 page, so both
+  score-digit blits inside `tmorpionDisplay()` can only ever match
+  `yPass==0` - yet `tmorpionRecupeBack()`'s `yPass==0||yPass==1` branch
+  called `tmorpionDisplay()` (2 blits x 128 columns = 256 calls/frame) on
+  row 1 too, a result that's mathematically always zero; fixed by
+  splitting the two rows apart so row 1 never calls it at all. (2)
+  `tmorpionDisplay()` itself called both score blits for all 128 columns
+  on row 0, though only 8 total columns (x in [25,28] and [90,93]) can
+  ever be nonzero - fixed by gating each call to its own exact column
+  range at the call site. (3) `tmorpionMenuFlip()` (the exact function the
+  difficulty-toggle key press calls) ran 3 `tmorpionBlitzSprite()` calls
+  (the cursor plus both intro-picture illustrations) unconditionally
+  across all 1024 pixels/frame - fixed by precomputing each sprite's own
+  page-row and column range once per row/call (derived directly from each
+  sprite's own `xPos`/`wPos`/`yPos`/`hSprite`, so the gate is an exact
+  reproduction of what `tmorpionBlitzSprite()`'s own internal bounds check
+  already computes, not an approximation - zero behavior change,
+  confirmed via screenshot showing identical menu rendering before and
+  after). Verified via the perf overlay: instantaneous CPU at rest dropped
+  to a steady 4-5%, with only a brief single-frame tick at the exact
+  moment of a difficulty toggle (one real full-render call plus a state
+  transition) rather than a sustained spike - confirmed correct by the
+  user directly ("the fix helps") after re-testing.
+- `src/games/gameTinyPlaque.c` - Tiny Plaque (Daniel C, GPLv3, same
+  `tinyJoypadShim`/`FastTinyDriver.h` lineage). A dental-hygiene shooter -
+  a toothpaste-tube submarine drifts between two rows of teeth (top/
+  bottom, 8 each), shooting loose "food"/plaque particles before they
+  stick to a healthy tooth and start attacking it; clearing every
+  particle in a level banks leftover tube fuel as bonus score/teeth, then
+  the level advances. The last untried title in the already-proven
+  `tinyJoypadShim` family (confirmed via `FastTinyDriver.h`) - picked
+  specifically because it has the **deepest C++ class hierarchy found in
+  this project** (`Sprite_TPLAQUE` -> `Moving_Sprite_TPLAQUE` ->
+  `Food_Sprite_TPLAQUE`/`Main_Sprite_TPLAQUE`, plus a separate
+  `Weapon_Sprite_TPLAQUE`, all `:public`-deriving from the base) and the
+  highest goto count (20) of any remaining Tiny X title, confirmed via a
+  fresh grep before committing. Flattened into one combined `TplaqSprite`
+  struct holding every field any of the 4 flavors ever uses, same
+  "flatten to one struct + explicit-pointer functions" treatment as Tiny
+  Missile/Tiny Pipe's own smaller class headers, just wider here since
+  more flavors share one struct. `switch`/ternary/intra-function-`goto`
+  all avoided proactively (15 switch statements, 18 ternary uses, and
+  every `goto SUITE`/`goto ENDING` early-exit rewritten as `continue`/
+  `break`/early `return`); binary literals (the checkerboard-dither
+  masks, the weapon's own single-byte bitmap) rewritten as decimal with a
+  `// 0bNNNNNNNN` comment, matching Tiny Bike's own established finding.
+  `TSIA_TPLAQUE` (declared upstream, never referenced anywhere else)
+  confirmed dead by grep and dropped. All 11 data tables extracted via a
+  Python script and byte-diff-verified against the finished port before
+  ever building - all matched on the first attempt.
+  **A genuine VRAM-persistence partial-redraw bug, proactively caught
+  before shipping rather than retrofitted after a report**: upstream's
+  own `Tiny_Flip_TPLAQUE(0)` (normal gameplay) only ever draws pages 1-7,
+  and `Tiny_Flip_TPLAQUE(2)` (the score-panel refresh) only ever draws
+  page 0 - each relies on the real SSD1306's own hardware VRAM to still
+  hold the *other* mode's last write for the page it itself skips, the
+  same real-hardware assumption already found and fixed in Pinball/Doc/
+  Bert/Trick/Pipe. Fixed by folding the score/extra-teeth overlay
+  directly into the same per-pixel function mode 0 already uses and
+  having every mode always redraw all 8 pages - modes 0 and 2 became
+  pixel-identical once unified, so they now share one dispatch branch.
+  **The level-completion sequence needed the most states of any port so
+  far** (14 total) - upstream's `END_OF_LEVEL_TPLAQUE()` synchronously
+  calls a genuinely multi-second blocking cascade (`DECOUNT_TPLAQUE()`'s
+  own fuel-to-score countdown loop, then a per-tooth restore/dispense
+  sequence with real `_delay_ms()` waits throughout) entirely from inside
+  a single function called once per tick - rewritten as explicit frame-
+  stepped states (`TPLAQ_STATE_DECOUNT_FUEL`, `_DECOUNT_TEETH_UP/DOWN`,
+  `_NEXTLEVEL_WAIT1/2`, `_ADD_TEETH[_FINAL_WAIT]`) covering each real
+  animated piece individually, the same "blocking loop -> explicit
+  resumable state" treatment every port here needs, just with more
+  distinct pieces than usual to track (`RESTORE_TEETH_TPLAQUE()`'s own
+  per-tooth 1ms delays were the one exception - imperceptible even on
+  real hardware, so collapsed into one atomic pass instead of a dedicated
+  state, since a real redraw always follows immediately anyway).
+  **A real bug found immediately after the first build, before any user
+  report** - a genuine data/function naming collision: the tube sprite's
+  own PROGMEM data table and its render function were both ported as
+  `tplaqTube`, silently shadowing each other. Vircon32's single-
+  translation-unit, no-forward-declaration compile model caught this
+  immediately as a redefinition error rather than letting it slip through
+  - fixed by renaming the data table to `tplaqTubeSprite`, matching every
+  other sprite table's own `*Sprite` naming convention in this file.
+  **A serious self-introduced CPU regression, found immediately via the
+  perf overlay before ever reporting the port "done"**: an early draft
+  added an *unconditional* `tplaqTinyFlip(0)` call at the very end of the
+  per-tick playing-state function - but re-reading the actual upstream
+  `.ino` confirmed the real main loop only ever redraws from *inside* its
+  own `Skip_Frame==0` branch (1 of every 6 ticks); there is no trailing
+  redraw call after that switch at all. This wasn't a porting simplification
+  choice, it was a straightforward transcription mistake - and since
+  Vircon32's screen persists between frames exactly like real SSD1306
+  VRAM does when nothing redraws it, simply deleting the stray call was
+  the complete, correct fix (not a new caching scheme) - game logic
+  (movement/food/collision) still runs every tick, matching upstream,
+  only the *visual* refresh is 1-in-6. This alone dropped a sustained,
+  pegged 100% CPU reading down to ~1% at rest. Two smaller, genuine
+  per-pixel-render fixes were also applied proactively once caught
+  looking at this: `Food_Recupe_TPLAQUE`'s own per-pixel 8-sprite re-scan
+  (the same O(pixels x objects) shape already fixed in Bomber/Pacman/Doc/
+  Bert/Pipe) was replaced with once-per-page-row compositing into a
+  shared `tplaqFoodPageBuffer[128]`; and `tplaqTube()`/the score/extra-
+  teeth overlay (each already self-gated internally) were also gated at
+  the call site to their own precomputed per-row footprint, the same
+  "self-gated call still costs a full call" lesson as Arkanoid/Bert/Tris/
+  Trick/Morpion. Measured via the perf overlay during continuous fire+
+  movement (the specific scenario a direct user report called out as
+  still feeling slow after the redraw-throttle fix alone): dropped from a
+  sustained pegged 100% down to a 1-8% range. **Open question, raised
+  directly by the user and not yet resolved**: upstream's main loop has
+  no `_delay_ms()`/`FPS_Control` of its own at all (the "no genuine rate
+  to match" category, same as Trick/Invaders/Pinball/Bert/Tris in this
+  project's own frame-pacing survey) - so whether this port's uncapped-
+  60fps food-spawn timing (`tplaqGD.renew`/`renewFood`, ticked once per
+  real engine frame, never throttled) matches real ATtiny85 hardware's
+  own bare-loop speed is unverifiable without real hardware or reference
+  footage, the same open-ended category Arkanoid's own genuine 8x-too-
+  slow bug once hid in before someone happened to notice by feel.
+- `src/games/gameTinySQuest.c` - Tiny SQuest (Daniel C, GPLv3, same
+  `tinyJoypadShim`/`FastTinyDriver.h` lineage). A Seaquest-style
+  underwater rescue-and-shoot game - a sub drifts left/right shooting
+  fish while surfacing periodically to refill oxygen and drop off
+  rescued divers for points. `PASIVE_SPRITE_TSQUEST`/
+  `ACTIVE_SPRITE_TSQUEST` flattened into one `TsqSprite` struct, matching
+  every other class-hierarchy port here. All 20 data tables extracted
+  and byte-diff verified before ever building - caught one real
+  transcription error (`tsqBackgroundData` had 1044 values instead of
+  the correct 1024, fixed by regenerating the block programmatically) -
+  and one naming collision (`tsqBackground` used as both a table and a
+  function name, same mistake as Tiny Plaque's own `tplaqTube` bug,
+  fixed by renaming the table to `tsqBackgroundData`). Needed four
+  separate sound sequencers (a generic small-list player reused for two
+  different short cues, a dedicated reader for the real 27-note
+  `Music[]` table, and a downsampled ~380-call refill sweep) - the first
+  port needing more than one sequencer shape at once.
+  **CPU-load pass**: `tsqRecupeOther()`/`tsqRecupeBallisticOther()` had
+  the familiar O(pixels x objects) shape (up to 9 enemy sprites scanned
+  across all 1024 pixels/frame) - fixed via
+  `tsqCompositeOtherRow()`, composited once per page row. A user report
+  tying a further spike specifically to "shooting" pointed straight at
+  `tsqRecupeMain()`/`tsqRecupeSubsolo()`/`tsqRecupeBallisticMain()`,
+  which were self-gated internally but still called for all 1024
+  pixels/frame - the by-now-familiar "self-gated call still costs a
+  full call" lesson, fixed with row/x-range call-site gating.
+  **A new, fifth mechanism of the established "AVR-implicit-behavior"
+  bug family**, found from a user report ("sometimes no enemies or
+  'swimmers' appear at all") plus their own hint ("it may be related to
+  8bit vs 32bit somewhere"): `int8_t` signed-overflow/wraparound
+  *reliance* (joining byte-truncation, rand()-range-mismatch, shift-
+  count-wraparound, signed-sentinel-comparison, and logical-vs-
+  arithmetic-shift as a sixth-mechanism sibling, all stemming from the
+  same root cause - an AVR-implicit narrow-type behavior the plain-`int`
+  port can't assume holds). Three sites relied on a genuine
+  `int8_t` wraparound (-128 -> +127) as a deliberate upstream trick -
+  `SPEEDCALC_NEG`'s off-screen enemy-spawn decrement, `SUBSOLO_X`'s
+  background-scroll decrement (both "spawn far off-screen, wrap to
+  reappear on the opposite edge"), and `BallisticUpdate()`'s
+  `BallisticPositionX` (whose only clear condition, `<-6` with no upper
+  bound, meant a *rightward* shot - the sub's default facing - never
+  cleared without wrapping, permanently jamming the weapon - this was
+  the exact cause of a separate "sometimes i don't seem able to shoot
+  bullets" report). Fixed uniformly with a shared `tsqWrapInt8()`
+  helper (`val&0xFF`, then subtract 256 if >127) applied at each
+  load-bearing site. A background research agent subsequently audited
+  all ~20 other already-shipped games for the same pattern and found
+  **zero new genuine instances** (several close look-alikes were traced
+  and confirmed already safe via explicit bounds checks). Also fixed:
+  an off-by-one in the enemy sprite composite (`ox+6` should have been
+  `ox+7`, clipping the rightmost sprite column) and a VRAM-persistence
+  partial-redraw assumption (upstream's separate row-1-6/row-0+7 flip
+  calls unified into one `tsqRenderFrame()` that always draws all 8
+  rows, avoiding the Pinball/Doc/Bert-class bug proactively). Shipped
+  with a genuine 30fps whole-tick throttle (`TSQ_TICK_DIVISOR=2`) per
+  direct user request, with an explicit correction from the user mid-
+  session ("make sure logic runs at half speed also... so you did not
+  have to change wait constants") that settled this project's now-
+  standing approach: gate the *whole* tick body identically to the
+  render call and never rescale tick-counted wait constants
+  independently - the divisor alone is the single source of truth for
+  real-world timing. **A standing behavioral lesson reinforced hard
+  this session**: mid-investigation of the "can't shoot bullets" report,
+  testing was run to "verify" a fix already found via code reading alone
+  - the user corrected this immediately and sharply ("what did i tell
+  you about not testing yourself") - for any bug-report investigation,
+  diagnose and fix via code inspection only, never run the emulator to
+  test or verify, even after already finding and applying a fix.
+- `src/games/gameTinyDDug.c` - Tiny DDug (Daniel C, GPLv3, same
+  `tinyJoypadShim`/`FastTinyDriver.h` lineage). A Dig-Dug-style game -
+  dig tunnels through a bit-packed rock grid, fight up to 4 tracking
+  enemies with a 2-segment extending laser, or crush them by tunneling
+  out their support; the last enemy standing flees to a fixed exit
+  point once it's the only one left. `Sprite_TDDUG` ->
+  `Moving_Sprite_TDDUG` -> both `Enemy_Sprite_TDDUG`/`Main_Sprite_TDDUG`,
+  plus a separate sibling `WEAPON_TDDUG`, all flattened into one
+  `TddugSprite` struct. `Moving_Sprite_TDDUG::Ou_suis_je()` and
+  `WEAPON_TDDUG::Ou_suis_je()` are byte-for-byte duplicates upstream -
+  ported as one shared `tddugOuSuisJe()`. Found and dropped one
+  genuinely dead upstream parameter before ever compiling:
+  `WEAPON_COLISION_TDDUG(WEAPON_TDDUG W_, uint8_t Nu_)` takes its
+  sibling weapon segment *by value* and only ever mutates that local
+  copy in its `Nu_==0` branch - a guaranteed no-op with zero observable
+  effect on the real caller, confirmed by tracing the C++ value
+  semantics rather than assumed.
+  **A genuine real-hardware timing discovery**: upstream's main loop
+  alternates `Skip_Frame` between two halves every iteration - one with
+  a real `millis()`-based ~66ms busy-wait (render + first-time/death
+  checks), one without (`Trigger_adj`+`Check_Collision`, which runs "for
+  free" immediately after). Since the wait dominates both halves' real
+  time, the true tick period is a genuine ~66ms/~15.15Hz hardware rate,
+  not an AVR performance compromise - unlike most other Daniel-C games
+  in this project's own frame-pacing survey. Ported as one merged
+  per-tick body (dropping the Skip_Frame split itself as a redundant
+  AVR-era loop shape, same category of drop as Pacman/Bomber's own
+  `FPS_Control` split) gated by a single `TDDUG_TICK_DIVISOR` - a real,
+  minor, documented simplification results (the death animation's own
+  `DEAD` 1->6 counter now climbs at the tick rate directly instead of
+  once per Skip_Frame pair, so it plays back roughly 2x faster than
+  upstream - a ~6-tick animation, not worth a second nested throttle).
+  Two more logical-vs-arithmetic-shift-on-negative-operand bugs (the
+  fourth bug's own mechanism, already documented above) found and fixed
+  proactively before ever compiling: `RecupeLineY_TDDUG`'s own
+  `Valeur>>3` (fed a weapon Y that can go negative) and
+  `Moving_Sprite_TDDUG::Ou_suis_je()`'s own `y_=PY>>2` - both fixed with
+  shared `tddugSafeShiftDiv4()`/`tddugSafeShiftDiv8()` helpers (branch
+  on sign, `-((-val+N-1)>>k)` for negatives), plus the established byte-
+  truncation fix (`RecupeDecalageY_TDDUG` takes a `uint8_t` parameter by
+  value upstream - reproduced with an explicit `&0xFF` mask before the
+  now-safe modulo-8 math, since Vircon32 has no implicit narrowing).
+  `LEVEL_TDDUG[]`'s 252 values (binary literals throughout) converted to
+  decimal; all 12 data tables and all 5 generated sound-sweep note
+  tables byte-diff verified against a Python extraction before ever
+  building. Three real dialect issues surfaced only at **compile time**
+  despite a careful proactive read of the dialect rules beforehand:
+  ternary operators used pervasively (rewritten as `if`/`else`), a
+  `struct TypeName[N] varName;` array declaration (the dialect accepts
+  `struct TypeName{...}` only at the actual definition site - every
+  other reference, including array declarations, needs the bare type
+  name with no `struct` keyword at all, confirmed against Tiny SQuest's
+  own `TsqSprite[9] tsqOther` precedent), and a sound-sequencer helper
+  originally declared to take an `int[150] notes` parameter (arrays
+  can't be passed by value - "functions cannot pass arguments of size >
+  1" - switched to a plain `int* notes` pointer, matching every other
+  sprite-table parameter in this project).
+  **A real bug found via live user testing, right after shipping**: the
+  user reported that trying to launch the game from the menu instead
+  showed a corrupted, "double-exposure" mess of *other* games' leftover
+  art (Tiny Bomber's HUD/checkered grid, Invaders-style monster rows,
+  Pac-Man dots) stacked on top of the menu, then nothing - a screenshot
+  made the cause obvious in hindsight. Root cause: `tddugRenderFrame()`/
+  `tddugRenderAttract()` never called `md_beginFrame()` - every other
+  game's own render/flip function does, at its very top. `md_drawColumn()`
+  deliberately skips its draw call whenever a column's composited byte
+  is `0`, relying on `md_beginFrame()`'s own `clear_screen()` having
+  already blanked the frame - without it, every pixel DDug never
+  explicitly draws just kept showing whatever was on screen from
+  earlier games/the menu, accumulating across unrelated screens instead
+  of a clean frame each tick. Fixed by adding `md_beginFrame()` to the
+  top of both render entry points - a plain oversight, not an AVR-
+  dialect issue, but the single highest-impact bug of this port by a
+  wide margin. Separately, a genuine (if lower-severity) logic bug was
+  found via a *requested* code-review pass (not a user report): the
+  weapon's second segment can legitimately reach an X position slightly
+  left of the tunnel's own coordinate origin when fired left near the
+  left wall, and `tddugOuSuisJe()`'s X half used a raw, unsafe `>>2`
+  shift assuming X is always non-negative (true for the player/enemies,
+  both hard-clamped >=20, but not for this one weapon case) - the
+  resulting huge-positive logical-shift garbage value happened to be
+  safely caught by `tddugReadGrid()`'s own `x>21` bounds check (not a
+  crash), but still produced a wrong "hit a wall" result for that edge
+  case. Fixed by routing X through the same safe shift helper already
+  used for Y.
+  **A requested CPU-load audit** (not a user-observed report this time)
+  found the same "self-gated call still costs a full call" gap already
+  fixed elsewhere: `tddugMainSprite()` (the player) and
+  `tddugRecupeScores()` were each self-gated internally but still
+  called across all 1024 pixels/tick - fixed with the same row/x-range
+  call-site gating used throughout this project. A second lever found
+  in the same pass: the tunnel wall-mask was being recomputed via 2
+  `tddugReadGrid()` calls *per pixel* for the whole ~88x6 tunnel region
+  (up to ~1056 grid reads/tick), even though every 4 consecutive
+  columns share the same underlying grid cell - cached once per row
+  instead (`tddugBackWallCache`, 44 reads/row) via the same "cache what
+  doesn't actually change every pixel" lesson as Tiny Doc's own
+  row-scoped dirty tracking.
+  **A design question surfaced to the user rather than assumed**: a
+  report that "certain enemies seem to be able to pass through walls"
+  right after the player cleared a wall elsewhere turned out, on
+  inspection, to be a faithful port of a deliberate upstream mechanic -
+  `E_GRID_UPDATE_UP/DOWN/LEFT/RIGHT` return the enemy's own `Tracking`
+  flag (not a fixed "1") when a wall is hit, so an enemy that has lost
+  tracking phases straight through walls - the classic Dig Dug "ghost"
+  behavior, used both by a periodic real-time counter
+  (`Trigger_adj_TDDUG`, which permanently drops one enemy's tracking
+  once `Counter` exceeds `Trigger_Counter`, itself decreasing each
+  level) and by the final-surviving-enemy escape mechanic (so it isn't
+  stuck behind un-dug tunnel walls reaching the exit). Confirmed no
+  code path ties this to digging itself - `Trigger_Counter` is purely
+  time-based (~13+ real seconds on level 1), so the apparent correlation
+  with "just cleared a wall elsewhere" was very likely coincidental
+  timing rather than causal. Presented to the user as a keep-faithful-
+  vs-change decision rather than unilaterally "fixed" - left faithful
+  (no change requested).
+  **Frame-pacing, revisited twice more by direct request**: shipped at
+  `TDDUG_TICK_DIVISOR=4` (matching the genuine ~15fps hardware rate
+  above), then changed to `1` (native 60fps, "so the game runs twice as
+  fast" - the same "faster feels nicer than historically-accurate" call
+  already made for t2048), then settled at `2` (30fps) - all three
+  changes touched only the one `#define`, with every tick-counted
+  constant (`tddugWaitFrames`, `triggerCounter`, etc) deliberately left
+  unrescaled throughout, matching the standing "one divisor, no dual
+  bookkeeping" philosophy from Tiny SQuest's own throttle above.
+  **A project-wide warning cleanup, requested directly, that surfaced
+  once DDug's own warnings were fixed first**: this compiler caps how
+  many warnings it reports per run, so `obonoCoreShim.c`'s own 9
+  pre-existing warnings (unused parameters in its `loadRecord`/
+  `storeRecord` stubs, an unused `counter` global) were silently eating
+  the entire budget and hiding every later file's own warnings,
+  including DDug's own single "unused parameter" warning
+  (`tddugAdjustWeapon2`'s `other`, matching upstream's own confirmed-
+  dead reference parameter). Confirmed via an isolated single-file
+  compile harness (bypassing the cap) that fixing obonoCoreShim.c's own
+  warnings unmasked four more, pre-existing, unrelated warnings in
+  already-shipped games (`gameTinyInvaders.c`'s `tinvBackground`/
+  `tinvUFOAttackCheck`, each with one genuinely-unused parameter;
+  `gameTinyTris.c`'s `trisHGrid`, `gameTinyBike.c`'s `bikTOP_BACK`, and
+  `gameTinyPipe.c`'s `tpipeBurstStep`, three data tables/a variable
+  confirmed dead by grep before removal). Fixed unused-*parameter*
+  warnings by self-assignment (`param = param;`) at the top of the
+  function - this dialect has no `(void)param;` cast-to-void idiom to
+  suppress them the conventional way - and fixed unused-*variable*/
+  *table* warnings by outright removal instead (self-assignment doesn't
+  apply the same way to a table with no natural call site), matching
+  this project's own established practice for confirmed-dead code.
+  Verified project-wide with `compile -Wall`: zero warnings remain.
+  Menu thumbnail added the same way as every other port - a real
+  gameplay screenshot (dug tunnels, two enemies, HUD) landed directly in
+  the existing 4x6 grid's cell 21 (row 5, col 1) without needing to grow
+  the canvas.
+- `src/games/gameTinyLander.c` - Tiny Lander v1.0 (Roger Buehler/tscha70,
+  2020, GPLv3). A Lunar-Lander-style game - thrust left/right/up to guide
+  a ship down onto a landing pad carved into a scrolling terrain
+  silhouette, across 10 hand-authored levels. Picked via a quick token-
+  cost survey across every remaining untried candidate (TinyDungeon,
+  TinyLanderV1.0, and gametiny's 5 non-overlapping "unique" concepts) once
+  every already-catalogued `tinyJoypadShim`/`obonoCoreShim` game was
+  shipped - TinyLander's own `.ino` is 454 lines (goto/while1=6, no C++
+  classes, no `switch`/ternary at all), dramatically smaller than any
+  gametiny candidate (805-1081 lines, each also needing a genuinely new
+  driver adaptation) or TinyDungeon (a full raycaster class, ~1400 lines).
+  Not actually `tinyJoypadShim`/`obonoCoreShim` lineage by name (its own
+  `gameinterface.h/.cpp`), but investigation before committing showed this
+  doesn't need a new shim at all: its `JOYPAD_LEFT/RIGHT/UP/DOWN/FIRE`
+  macros use the exact same `analogRead(A0)`/`analogRead(A3)`/
+  `digitalRead(1)` thresholds as every Daniel-C game already ported here,
+  and its own `SOUND(freq,dur)` is byte-for-byte identical to
+  ELECTROLIB.h's shared bit-bang formula - both ported straight onto the
+  existing `isLeftPressed()`/etc and `Sound()` from `tinyJoypadShim`.
+  The `DIGITAL` struct's `uint8_t D[5]` array member was ported as 5
+  separate named fields (`d0`..`d4`, read via a `tlandDigitAt()` index
+  helper) rather than an array-typed struct member, since no existing
+  struct in this project had tried one and there was no reason to be the
+  first. `GameDisplay()`'s own per-pixel collision detection is genuinely
+  embedded in what's otherwise a "compute this column's byte" render
+  function (a classic overlap-via-OR-vs-ADD bit trick) - ported exactly as
+  structured, including a colliding pixel re-invoking the lander-sprite
+  function a *second* time within the same call (which, since
+  `shipExplode` was just set to 3 by that same collision check,
+  immediately renders that pixel via the explosion-sprite branch instead
+  of the normal one - the actual mechanism upstream uses to make the
+  explosion visibly begin on the very frame a crash is detected, not
+  redundant work to simplify away). The level-clear bonus sequence's two
+  blocking loops (a per-star flash-and-chime, and an uncapped "count the
+  score up one point at a time with a chime each point" tally - up to 960
+  individual +1 steps on the last level) were converted to frame-stepped
+  sub-states, with the score tally specifically downsampled to finish in
+  about half a second regardless of magnitude (a computed step size) -
+  the same "downsample a computed sweep rather than reproducing every
+  literal step" treatment already used for oversized *sound* sweeps
+  elsewhere, just applied to a *visual* count-up loop here instead.
+  One genuine upstream quirk fixed rather than replicated: `moveShip()`
+  clamps `ShipPosY` against an upper bound but has no corresponding lower
+  bound at all - upstream's own `ShipPosY` is `uint8_t`, so flying up
+  aggressively enough to push it negative would AVR-wrap to a large
+  positive value instead of going negative, and nothing else in the game
+  treats a wrapped Y as a deliberate mechanic (unlike Tiny SQuest's or
+  Tiny DDug's own genuine wraparound-reliant tricks) - read as a plain
+  missing bounds check rather than a designed behavior, so fixed with an
+  explicit lower clamp instead of relying on Vircon32's own unspecified
+  negative-value handling in the downstream page arithmetic. Also
+  initialized `SetLandingMap()`'s local `prev` variable to 0 explicitly,
+  where upstream reads it before ever assigning it on the loop's first
+  iteration (relying on whatever garbage happened to be on the AVR stack,
+  formally undefined behavior rather than a documented AVR-vs-Vircon32
+  semantic difference like this project's other found bugs).
+  Data extraction/verification followed the established script-based
+  byte-diff workflow - caught one real transcription error (`GAMEMAP`,
+  a 540-value terrain table, had 2 values dropped partway through a
+  hand-copy, shifting everything after; fixed by regenerating the whole
+  block programmatically from the verified extraction rather than
+  hand-patching, the same "don't try to eyeball-fix a large data table"
+  lesson from Tiny Bomber's own dropped-byte bug).
+  **Two real issues found via direct user report, right after shipping**:
+  (1) "left and right are swapped" - traced to upstream's own control
+  naming: `ThrustLEFT` increases `velocityX` (moving the ship *right* on
+  screen) and `ThrustRIGHT` decreases it (moving *left*) - upstream's
+  naming reflects which thruster physically fires (a left-mounted
+  thruster pushes the ship right, like a real rocket), not the resulting
+  screen direction, so a faithful `isLeftPressed()`-to-`thrustLeft`
+  mapping reads backwards on a real gamepad - the same class of
+  deliberate remap already done for Tiny Arkanoid's own faithfully-
+  inverted-but-confusing upstream control scheme. Fixed by swapping
+  which physical button sets which flag (not the flags' own meaning
+  elsewhere in the physics/sprite code), diagnosed and fixed via code
+  reading alone. (2) a requested CPU-load check found the same "self-
+  gated call still costs a full call" gap this project keeps finding -
+  the ship-sprite display function was called for all ~840 game-area
+  pixels/frame despite its own real footprint being only ~14 pixels
+  (a 7x2 box) - fixed by precomputing the ship's row/column bounds once
+  per frame and gating the call site to that exact range (a literal
+  duplicate of the callee's own existing bounds check, not an
+  approximation). A separate optimization applied from the start rather
+  than retrofitted: every dashboard/UI layer (score/velocity/fuel/lives)
+  has its own real footprint entirely within the left instrument panel
+  (x<=22), and the game-area/collision layer's footprint is entirely
+  within x>=23 - these never overlap, so the render loop is split on
+  that fixed boundary instead of calling every self-gated layer across
+  all 128 columns. **A follow-up optimization request found one more
+  layer of the same gap, one level narrower**: within that x<=22 panel
+  branch, Score/Velocity(x2)/Fuel/Lives were each still being called for
+  all 8 rows despite each one's own internal check only ever matching a
+  single specific row (`y==1`/`4`/`5`/`6`/`7` respectively) - only
+  Dashboard genuinely needs every row (it's the panel's own background
+  image). Fixed by gating each of the other 5 calls to its own exact row
+  at the call site too, cutting roughly 700 wasted calls/frame from the
+  panel side on top of the earlier x-boundary split.
+- `src/games/gameWrenRollercoaster.c` - Wren Rollercoaster (Andy Jackson,
+  2015-2017, non-commercial-with-attribution; ATtiny-Joypad port by Billy
+  Cheung, 2018). A Tiny-Wings-style endless flyer - a bird glides over a
+  scrolling sine-wave landscape, gaining speed/height by sliding through
+  valleys and gently flapping over hills, until a fixed "distance" budget
+  runs out (no crash/death mechanic - purely a scoring endurance game).
+  From `more games/gametiny/`, the folder of ATtiny-Arcade-lineage games
+  this project's own earlier triage confirmed use a genuinely different,
+  hand-rolled `ssd1306_send_byte()` driver rather than `tinyJoypadShim`/
+  `obonoCoreShim` - picked as the next port via the same "least tokens"
+  survey used for Tiny Lander, once every already-catalogued Tiny-X/obono
+  game shipped: smallest remaining file (805 lines) among every untried
+  candidate (TinyDungeon, and gametiny's other 4 non-overlapping "unique"
+  concepts, 833-1002 lines each), goto/while1=0, no C++ classes. Investigation
+  before committing found the same thing Tiny Lander's own port already
+  proved once: despite the different-named driver, Billy Cheung's own
+  Tiny-Joypad button-remap comment documents the exact same A0/A3
+  500-750/750-950 analog thresholds and digital-pin-1 fire button every
+  other game here already uses, and `ssd1306_send_byte()` is called
+  exactly once per column per page - the same "one byte per (column,
+  page)" model this whole project's `md_drawColumn()` already handles -
+  so no new shim was needed here either, just straight onto
+  `isLeftPressed()`/`isRightPressed()`/`isFirePressed()`/`Sound()` from
+  the existing `tinyJoypadShim`.
+  A real VRAM-persistence partial-redraw assumption was found and fixed
+  proactively before ever compiling (matching the same bug class already
+  found in Pinball/Doc/Bert/Tris/Pipe/Plaque): upstream's own gameplay
+  tick calls `drawBird(0,2)` (bird sprite only, columns 8-15, pages 0-1)
+  and `drawLandscape(2,8)` (full composite, pages 2-7) - pages 0-1's own
+  columns 0-7 and 16-127 are never drawn during normal play at all,
+  relying on the real SSD1306's VRAM still holding whatever was last
+  written there (always black in practice, since nothing else ever draws
+  there after the initial screen clear) - reproduced this exact visual
+  result directly rather than needing an actual persistence trick, since
+  the intended appearance (blank sky) is already known and constant.
+  `doDrawRS`/`doDrawLS`/`doDrawRSP`/`doDrawLSP`'s own small per-column
+  bird-sprite lookup (a switch upstream, cases 0-6 plus a default) was
+  ported as a flat 8-entry array instead, avoiding this dialect's
+  unverified switch support the same way Doc/Bike's own established
+  caution already does. A genuinely subtle catch found by careful
+  reading rather than a bug report: `floor(boost/40)` and
+  `floor(2+speedBoost/110)` upstream both operate on values that are
+  already plain `int`, so the inner `/` is *already* a truncating integer
+  division before `floor()` ever sees it - floor of an already-integer
+  value is a no-op, unlike the landscape-height computation's own
+  `floor(62-height+height*sinfactor)` (a genuine float floor, since
+  `height`/`sinfactor` are real floats there) - ported the first two as
+  plain integer division instead of literally calling `floor()` on a
+  float cast of an int quotient, which would have been a needless,
+  easy-to-get-subtly-wrong indirection for no behavioral difference
+  (C's own truncate-toward-zero `/` is identical on both AVR and
+  Vircon32 regardless of operand sign, so no cross-platform discrepancy
+  needed guarding against here either, unlike the shift-based bugs found
+  in other games). `random(min,max)` calls ported onto the shared
+  `arand()` helper; `randomSeed(0)` itself (a fixed, deterministic seed
+  upstream, meaning the terrain sequence is bit-identical between
+  playthroughs on real hardware) has no equivalent here since Vircon32's
+  `rand()` isn't seedable the same way - the terrain will differ between
+  playthroughs on this port, a minor accepted deviation. `beep()`'s own
+  NOP-loop-based tone generation (not ELECTROLIB.h's calibrated
+  `_delay_us()` formula) has no exact real-Hz equivalent to reproduce
+  faithfully - ported as a heuristic mapping onto the shared
+  `Sound(freq,dur)`; the intro bounce animation's own ~270-step tight
+  loop (each step both redraws and beeps at a continuously-varying
+  pitch) was simplified to one representative beep per bounce cycle (3
+  total) rather than one per step, since Vircon32's queueless audio
+  channel would only ever make the *last* of ~90 rapid calls per cycle
+  audible anyway - the same "collapses to the last tone" finding already
+  documented for every other oversized upstream sound loop in this
+  project. EEPROM high-score persistence dropped per every other port's
+  own precedent (session-local only) - the "hold fire 2s to reset high
+  score or toggle mute" secret menu action still works, just against the
+  session-local value.
+  **CPU-load pass, applied proactively from the start rather than
+  retrofitted**: every text/number rendering layer (title, game-over,
+  new-high-score screens, and the in-game score/time-bar) is self-gated
+  to one exact row internally, but - the by-now-well-established "self-
+  gated call still costs a full call" lesson - each was also gated by
+  row at the render loop's own call site before ever shipping, rather
+  than waiting for a CPU report the way several earlier games in this
+  project needed.
+  Font data (`font6x8AJ.h`, a hand-truncated subset of the standard
+  `ssd1306xled_font6x8` table missing z/h and most symbols to save flash
+  space) extracted and byte-diff verified - the game's own credit text
+  ("andh jackson") deliberately exploits the header's own documented
+  character remap (lower-case h prints as y, w prints as /) to spell
+  "andy jackson" using only the truncated character set available;
+  reproduced the exact same remap formula (`c=ch-32; if(c>0)c-=12;
+  if(c>15)c-=6; if(c>40)c-=6;`) and left the string literal unchanged
+  rather than "fixing" the spelling, since together they reproduce the
+  correct on-screen text.
+  **A real bug found via direct user report right after shipping**: "the
+  new highscore texts... seem to wrap around the screen." Root cause: the
+  shared `wrenTextByte()` text-rendering helper only correctly stops
+  *exactly at* a string's own null terminator (`str[charIdx]==0`) - but
+  the render loop calls it for every one of 128 columns on the matching
+  row, not just the columns the string itself occupies, so for `x` values
+  further right than the string's real end, `charIdx` keeps advancing
+  *past* the terminator into whatever undefined memory happens to follow
+  the string literal - not guaranteed to be zero, so it could read back
+  as garbage "characters" bleeding across the rest of the row (matching
+  the reported "wrap around" symptom exactly). The " NEW HIGH SCORE "
+  screen has the *shortest* string relative to its allotted row width of
+  any text on this game's screens (96 of 128 columns actually occupied,
+  leaving the largest unprotected tail of any call site), which is likely
+  why this specific screen was the one where it became visible enough to
+  notice and report. Fixed by bounding `charIdx` against the string's own
+  real length via `strlen()` (already available project-wide via
+  `string.h`, pulled in earlier by `menu.c`'s own single-translation-unit
+  include) before ever indexing into it, rather than relying solely on
+  eventually encountering a genuine null byte. `wrenNumberByte()` was
+  independently confirmed *not* to share this gap - it already computes
+  and bounds against `wrenCountDigits()`'s own correct digit count before
+  ever indexing, unlike `wrenTextByte()`'s bare terminator check. Diagnosed
+  and fixed via code inspection only, per this project's own standing
+  practice for bug-report investigations.
+- `src/games/gamePong.c` - Bat Bonanza / Pong (Andy Jackson, 2015-2017,
+  non-commercial-with-attribution; ATtiny-Joypad port by Billy Cheung,
+  2018). A classic Pong clone - a 1-pixel-wide bat on each screen edge,
+  single-button/dual-button/2-player control modes, 4 difficulty levels,
+  first to 7 points wins. From `more games/gametiny/
+  BatBonanzaAttinyArcade/` - a badly-named folder (its own header credits
+  "Pong game by Andy Jackson", nothing to do with bats or bonanzas) -
+  picked next via the same "least tokens" survey as every prior gametiny
+  pick, among the remaining candidates (this folder, the two "UFO"-
+  combined files, TinyDungeon): smallest file (910 lines) and lowest goto
+  count (1), confirmed via a fresh per-header `class ` grep to have no
+  hidden C++ complexity. **Menu title corrected after the initial port
+  shipped as "PONG"**: the user asked to name it "Bat Bonanza" instead,
+  after checking - the game's own title screen genuinely spells out
+  "BAT" / "BONANZA" on screen (confirmed directly in the `.ino`'s own
+  `ssd1306_char_f6x8` calls), so what a player actually sees takes
+  priority over the header comment's own attribution ("Pong game by...",
+  which stays as the credited author, "ANDY JACKSON", rather than the
+  display title). Same no-new-shim-needed pattern as every other gametiny
+  port (Lander/Wren/Frogger) - Billy Cheung's own A0/A3/fire-pin
+  thresholds matched exactly.
+  Not `tinyJoypadShim`/`obonoCoreShim` lineage by name. This game's own
+  `font6x8AJ.h` (re-extracted and byte-diff verified rather than assumed
+  identical to Wren's same-named file, which turned out to have a
+  *different* character set - full A-Z here, vs. Wren's own truncated
+  set) remaps lowercase 'h' to a 'y'-shaped glyph, and the credit string
+  `"bh andh jackson"` deliberately exploits this (renders as "by andy
+  jackson") - ported verbatim rather than "corrected", the same z->@/h->y
+  substitution lesson from Frogger's own font bug.
+  **The one genuinely novel structural piece**: upstream's main loop
+  delay is a real, **variable** millisecond delay (`factor`, 2-30ms,
+  computed from difficulty and the live score gap) rather than a fixed
+  FPS - faster when a side is behind, to help it catch up or make it
+  harder depending on difficulty. Ported with a small accumulator
+  (`pongAccumMs`, added every real frame, ticking the game forward once
+  it reaches the current `pongFactor`) capped to at most one logic tick
+  per real 60fps frame - a **deliberate, documented simplification**: at
+  the most extreme setting (expert difficulty, big lead) `factor` can
+  drop below 16.67ms, meaning upstream's intended rate there slightly
+  exceeds Vircon32's native 60fps; capping at 60fps instead of adding a
+  multi-tick-per-frame catch-up loop accepts a minor speed cap only in
+  that one extreme corner in exchange for much simpler, lower-risk
+  accumulator logic (every other difficulty/score-gap combination lands
+  comfortably under 60fps, where the accumulator behaves exactly as
+  intended).
+  Round-scoring win-check moved earlier than upstream's own control flow:
+  upstream only skips the round-flash-and-restart when the just-updated
+  score has already reached WINSCORE, but doesn't actually end the
+  *match* until a separate, later check at the bottom of the main loop -
+  reached only on a subsequent non-scoring tick, since the scoring branch
+  itself unconditionally breaks out first. Ported as a single immediate
+  win-check right at the scoring point instead, since the *outcome*
+  upstream clearly intends (skip the round-flash on the match-winning
+  point, go straight to the win screen) is identical either way, and this
+  port's explicit state machine has no equivalent "keep falling through
+  to a later check" shape to replicate faithfully anyway.
+  **Caught one real bug before ever compiling**: upstream's `int
+  platformWidth = 16;` (a non-zero global initializer) was initially
+  declared in the port with no explicit value, defaulting to Vircon32's
+  usual zero-init - the exact "audit every non-zero upstream global
+  initializer" bug class already found in Tiny Gilbert's own
+  `visible=1`. Caught and fixed by re-checking upstream's own declaration
+  line before ever building, not from a report.
+  **8-bit-vs-32-bit audit came back clean**: every shift relying on AVR's
+  implicit `uint8_t` narrowing (the paddle-drawing byte math,
+  `0xFF<<player%8` / `0x7E>>(8-player%8)`) got an explicit `&0xFF` mask
+  from the start, all shift amounts are provably bounded 0-7 (`player%8`
+  is never negative), no signed-sentinel tricks, no narrow int8_t/uint8_t
+  types anywhere (matching upstream's own all-plain-int globals).
+  **One real per-pixel optimization found via a requested pass**: the
+  render loop's PLAYING branch divided `pongBallX` by 8 on all 1024
+  pixels/frame to find the ball's column, even though the ball's position
+  is constant for the whole render pass - fixed by hoisting the division
+  (and the equivalent one for the ball's row) to run once per frame
+  instead. Score-digit rendering wasn't given the same caching treatment
+  - `WINSCORE=7` means scores here are always single-digit, so the
+  digit-count helper is already O(1) by construction, not worth a cache.
+  Verified via Puppeteer: attract screen (title art, mode indicator, and
+  the h->y credit substitution all correct), the 3-2-1 countdown, active
+  gameplay (both paddles and the ball rendering and moving correctly),
+  and an incidental live scoring event (the round-flash screen correctly
+  appearing with the AI's score at 1) confirming collision detection and
+  the scoring/round-transition state machine all work end-to-end.
+  **Menu title corrected from "PONG" to "BAT BONANZA"**, requested
+  directly ("name the game batbonanza in the menu (check up the name
+  first)") - checked before renaming rather than assuming: the game's own
+  title screen genuinely spells out "BAT" / "BONANZA" on screen (confirmed
+  in the `.ino`'s own `ssd1306_char_f6x8` calls), even though the header
+  comment credits it as "Pong game by Andy Jackson" - what a player
+  actually sees on screen took priority over the source comment's own
+  attribution, which stays as the credited author rather than the
+  display title. This also moved the game's alphabetized menu position
+  (from 5th, under "P", to 2nd, under "B") - no thumbnail impact, since
+  thumbnail region id is keyed to registration index, not display title.
+  **Control scheme revised twice more by direct request, right after**:
+  (1) "make the player bat move up with left or up and down with right or
+  down as well" - LEFT/RIGHT added as UP/DOWN aliases for the player's own
+  bat. This directly conflicts with LEFT/RIGHT's own existing difficulty-
+  cycle/mute-toggle gesture (holding left/right to move the bat would also
+  accumulate toward - and fire - that gesture on release) - flagged to the
+  user as a real design question rather than silently shipping the
+  conflict; the user chose to keep both behaviors as-is rather than remove
+  or rebind either one. (2) Immediately after, a direct bug report ("the
+  player BAT needs to move up when i press up and down when i press down
+  this does not currently happen") revealed the deeper issue: upstream's
+  own `gameMode` concept meant UP/DOWN only ever worked for player 1 in
+  "DUAL BUTTON" mode - the *default* mode ("ONE BUTTON") used fire-only
+  control (up=fire fast, released=down slow), matching upstream faithfully
+  but not the simple, expected behavior the user wanted out of the box.
+  Fixed by making player 1's own bat always respond directly to up/down
+  (and their left/right aliases) regardless of `pongGameMode`, collapsing
+  what upstream treated as two distinct control schemes into one - the
+  `gameMode` setting is now consulted only for player 2's own behavior (AI
+  vs. a second human on fire in "2 PLAYERS" mode).
+  **A 100% CPU report on the attract screen specifically, diagnosed and
+  fixed via code inspection only per direct user instruction** ("in bat
+  bonanaza / pong the title / attract screen reaches 100 cpu (don't test
+  yourself)"): `pongTextByte()` called `strlen(str)` on every one of the
+  ~768 pixel calls spanning the attract screen's 6 simultaneous text rows
+  - a real, avoidable "redundant per-pixel recompute of a frame-constant
+  value" (the same class already fixed for `pongBallX`'s own division,
+  and for Frogger's/Stacker's own score-digit counts) - proportionally
+  worse here than on any other game's attract screen, since Bat Bonanza's
+  own strings are both longer (~20 chars, heavily space-padded for
+  centering) and span more rows (6) simultaneously than Frogger's (4) or
+  Wren's (~5). Fixed by hoisting each row's string selection (and its
+  `strlen()`) out of the 128-column inner loop into a once-per-row setup
+  step, with a new `pongTextByteLen()` variant taking the pre-computed
+  length instead of recomputing it - `pongTextByte()` itself is
+  unchanged, still used by every other mode's own (lower-row-count,
+  shorter-string) text calls. Rebuilt and confirmed compiling clean; not
+  verified in the emulator, per the user's explicit instruction.
+- `src/games/gameStacker.c` - Stacker (Andy Jackson, 2015-2017, non-
+  commercial-with-attribution; ATtiny-Joypad port by Billy Cheung, 2018).
+  A classic Stacker tower-building clone - a row of blocks sweeps left/
+  right; pressing fire (or up/down) locks it against the row below,
+  trimming away any unaligned columns; running out of columns ends the
+  game, while reaching the top levels up (narrower start, faster sweep).
+  From `more games/gametiny/UFO_Stacker_Attiny/` - a genuinely **combined
+  cartridge** upstream (its own boot-time prompt lets the player pick UFO
+  or Stacker, sharing font/sound/EEPROM-highscore/game-over code between
+  both) - split into its own standalone menu entry rather than
+  replicating that in-cartridge sub-menu, matching this project's own
+  precedent for combined-file sources (Obono's `TinyJoypadWorks` monorepo
+  became 3 separate entries). UFO (the other half of this same file) is
+  intentionally left as a separate future port, not attempted here.
+  Picked via the same "least tokens" survey as every other gametiny pick,
+  among the remaining candidates (this file, the two "UFO"-combined
+  files, TinyDungeon) - chosen specifically because it offers *two*
+  genuinely novel concepts (UFO and Stacker) in one file, versus
+  `UFO_Breakout_Arduino`'s own UFO+Breakout pairing (Breakout duplicates
+  Tiny Arkanoid's already-shipped genre). Confirmed via a fresh per-header
+  `class ` grep to have no hidden C++ complexity.
+  This game's own `font6x8AJ.h` (re-extracted and byte-diff verified, not
+  assumed identical to any other game's same-named file) turned out to
+  remap 'f' to an 'h'-shaped glyph *and* 'h' to a 'y'-shaped glyph - a
+  different substitution pair than either Wren's or Bat Bonanza's own
+  copy of the "same" file - credit strings (`"andh jackson"`,
+  `"inspired bh"`, `"/ebboggles.com"`) ported verbatim rather than
+  "corrected", the same h->y/w->[slash] lesson already found in Frogger's
+  z->@ bug and Bat Bonanza's own font.
+  **A genuine VRAM-persistence gap, found by reasoning about the render
+  model rather than counting bytes this time**: upstream only ever
+  redraws the *current* moving row and the row that was *just* locked -
+  every earlier locked row (including the bottom "foundation" row) is
+  drawn exactly once and never touched again, relying on real SSD1306
+  VRAM to keep showing it. Fixed with a persistent `stkLockedRows[8][16]`
+  array tracking every screen row's own locked-cell pattern (not just
+  upstream's transient `row[1]`), refreshed only at the two real mutation
+  points (a successful lock, and a fresh level's reset) and redrawn in
+  full every frame alongside the currently-moving row - without this, the
+  tower would only ever show its topmost 1-2 rows instead of the whole
+  built structure. The live score digits and the row-7 tower foundation
+  share the same screen row upstream, by simple draw-order coincidence
+  (the digits are redrawn over the foundation every tick) - ported with
+  the same priority (score digits win over the locked-row pattern at row
+  7, not OR-combined, since OR-ing bit patterns would corrupt both images
+  into a hybrid rather than show either genuine one).
+  Upstream's own fire/up/down handling is a genuine input-redundancy
+  quirk worth preserving: fire, up, *and* down are all accepted as the
+  "lock the row" trigger, each via its own real busy-wait-for-release -
+  ported as a single edge-detected "any of the three, just pressed" check
+  instead of three separate blocking waits, since a frame-stepped engine
+  has no equivalent to "block until released" and a plain level-check
+  would let a held button re-trigger every tick instead of once per press.
+  **8-bit-vs-32-bit audit came back completely clean** - no shift
+  operators anywhere in the file at all (unlike Bat Bonanza/Frogger, this
+  game's box-tile rendering needed no byte-composition math), no signed-
+  sentinel tricks, no narrow int8_t/uint8_t types (matching upstream's own
+  all-plain-int/bool globals).
+  **One real optimization found via a requested pass**: unlike Bat
+  Bonanza's `WINSCORE`-capped single-digit score, Stacker's score grows
+  unbounded, so its own row-7 HUD digit recomputed its digit count via
+  `stkCountDigits()` on every one of 128 columns/frame for an unchanging
+  value - fixed with a dedicated `stkScoreByte()` variant taking the
+  digit count pre-computed once per frame, mirroring Frogger's own
+  `frgScoreDigits` fix (every other `stkNumberByte()` call site is a
+  low-frequency static screen - LEVELUP/GAMEOVER/NEWHIGH - not worth the
+  same treatment). EEPROM high-score persistence dropped (session-only),
+  matching every other port's precedent - the "hold fire ~2s to mute"
+  gesture is kept, the combined-cartridge-specific "reset both games'
+  high scores" gesture doesn't apply to a standalone entry and was
+  dropped outright. The `runCounter` idle-kill (ends the game after 20
+  full sweep cycles with the tower never locked, upstream's own anti-
+  battery-drain safeguard) was kept faithfully - a harmless, still-
+  reasonable anti-AFK safety net even without a battery to protect.
+  Verified via Puppeteer: attract screen (title, credits with both font
+  substitutions, and the decorative ascending-staircase graphic all
+  correct), active gameplay (the sweeping row, a real lock event
+  producing a partial/imperfect match and a visibly narrower next row,
+  score updating), and an incidental full game-over-to-new-high-score
+  transition (triggered naturally once the tower's width was trimmed to
+  nothing), confirming the persistent multi-row tower rendering, the
+  lock/comparison logic, and the end-game state machine all work
+  correctly end-to-end.
+- `src/games/gameUFO.c` - UFO (Ilya Titov, non-commercial-with-
+  attribution; ATtiny-Joypad port by Billy Cheung, 2018; combined into
+  one cartridge with Stacker by Andy Jackson). A Flappy-Bird-style
+  flyer - hold up/down to fly, release to fall, weaving through gaps in
+  oncoming obstacle walls; some gaps have a destructible dithered barrier
+  that only clears if aligned with it while firing an active shot as it
+  passes. The other half of `UFO_Stacker_Attiny`'s own combined cartridge
+  (Stacker, above, already shipped as the first half) - completing this
+  file means every genuinely new concept from `more games/gametiny/` is
+  now ported; only TinyDungeon remains from the whole project's original
+  scope. This game's own font, credit-string substitutions (`"mods bh
+  andh jackson"`, `"original game bh"`, `"/ebboggles.com"` - same h->y/
+  w->[slash] pattern as Stacker's own font, ported verbatim), and shared
+  game-over/new-high screens are the exact same upstream code Stacker's
+  own port already had to replicate - each split-out game keeps its own
+  self-contained copy, no cross-game-file sharing mechanism exists here.
+  **A genuine shift-safety rewrite, not a literal port, for the obstacle
+  wall/gap byte math** - the riskiest single decision in this port:
+  upstream's own `B11111111>>((row+1)*8-gapOffset[i])` (and its `<<`
+  sibling) can receive a *negative* shift amount whenever a gap's offset
+  falls outside the specific page being drawn - a real, reachable case
+  (`gapOffset` can exceed 8 while `row==0`, giving a shift amount well
+  below zero, yet still satisfying upstream's own `<=8` guard). This is a
+  *different* mechanism from the already-documented logical-vs-
+  arithmetic-shift and shift-count-wraparound bug classes - here the
+  shift *amount itself* can be negative, not just large - and AVR's own
+  behavior for a variable negative shift count isn't something this
+  project can safely assume or replicate. Rather than trying to preserve
+  a formula whose correctness depends on an unverified AVR quirk, the
+  wall/gap byte for a given page is computed directly with a small
+  fixed-range (0-7) per-pixel loop instead - independently correct by
+  construction, with no shift-amount risk at all. The dithered "gap is
+  blocked" barrier overlay is layered on top with a plain OR, same as
+  upstream's own approach (invisible over solid wall, visible only over
+  the otherwise-clear gap - exactly the intended look).
+  The player ship + its fire-trail are one continuous 35-byte sequence
+  upstream (8 ship bytes, masked by a 2-state `flameMask` for the thrust-
+  flame effect, followed by up to 27 trail bytes while a shot is active) -
+  ported as one `ufoShipTrailByte(idx)` lookup instead of duplicating the
+  ship-vs-trail distinction at every call site, preserving upstream's own
+  single continuous column layout (x 8-42).
+  **Two defensive clamps added beyond a faithful translation**: unlike
+  every other port's own score, UFO's can genuinely go negative in real
+  play (firing costs a point, with no floor) - `ufoBlockChance` and
+  `ufoMaxGap` are both later fed into `arand()` as a range, and upstream's
+  own formulas for both can drive them to zero or negative once score is
+  deeply negative, which no other port here needed to guard against.
+  Clamped to a safe positive floor instead of risking `arand()` receiving
+  a degenerate range. Given this, `ufoNumberByte`/`ufoScoreByte` were also
+  built with genuine signed-number rendering (a leading `-` glyph) from
+  the start, unlike every other port's own non-negative-only score
+  display.
+  The attract screen's 30 "stars" are generated *once* upstream (part of
+  the boot splash, never regenerated, relying on real SSD1306 VRAM to
+  keep showing them indefinitely) - generated once via `arand()` when
+  entering the attract state instead, cached, and redrawn from that cache
+  every frame (regenerating fresh random positions every frame would make
+  them flicker/jump instead of sitting still).
+  **8-bit-vs-32-bit audit came back clean**: every shift is either a
+  small fixed constant or bounded to 0-7 by construction, all explicitly
+  `&0xFF`-masked; the one genuinely risky shift-based formula upstream
+  had (the obstacle wall/gap byte) was avoided entirely via the per-pixel
+  reimplementation above rather than patched with a mask, since the risk
+  there was the shift *amount* going negative, not the shifted value
+  overflowing a byte.
+  **A real O(pixels x objects) optimization applied proactively during
+  this same session's audit pass, not retrofitted after a report**: the
+  obstacle list (up to 5) and the star field (30) were each initially
+  checked with their own per-object loop *inside* the 1024-pixel/frame
+  render loop (5120 and 30720 iterations/frame respectively) - the same
+  shape this project has repeatedly found and fixed in other multi-
+  object games (Bomber/Pacman/Missile/Frogger). Fixed by compositing each
+  into a shared page buffer once per page/row instead (40 and 240
+  iterations/frame respectively). The score's own digit count is also
+  cached once per frame (`ufoScoreByte`, mirroring Stacker's own
+  `stkScoreByte`), since UFO's score is unbounded like Stacker's, not
+  single-digit-capped like Bat Bonanza's.
+  Verified via Puppeteer: attract screen (title, both credit-line font
+  substitutions, and the star field all correct), active gameplay (the
+  ship rendering and responding to flight input, an obstacle wall with
+  its gap rendering correctly), a real collision-triggered game-over
+  (reached naturally in an early test run - a legitimate outcome, not a
+  bug, confirming collision detection and the state machine work), the
+  game-over-to-new-high-score transition, and an extended bobbing-flight
+  survival session confirming continued stable play (score tracking
+  correctly net of both scoring and firing-cost ticks) without crashes.
+  **A real bug found via direct user report right after shipping**
+  ("pressing A... killing a laser the score keeps going negative and no
+  new obstacles appear"), diagnosed and fixed via code inspection only,
+  per the user's own explicit "don't test yourself" instruction. Root
+  cause: upstream's `doDrawLS()`/`doDrawRS()` (the ship-render functions)
+  have a real side effect embedded in them - once `fireCount` is active,
+  they play the fire sound *and* reset `fire` back to 0 - the exact same
+  "render function has embedded logic" shape already found once before
+  in Tiny Invaders' own `tinvMyShoot()`. Converting those two functions
+  into pure byte-lookup helpers for this port's rendering model
+  (`ufoDoDrawLS`/`ufoDoDrawRS`) dropped that reset entirely, so
+  `ufoFire` never cleared after a shot - `if(ufoFire==1)ufoScore--;`
+  then fired every subsequent tick forever (not just once per shot),
+  driving score deeply negative, which in turn drove `ufoMaxObstacles`
+  down to 0 or negative (`(ufoScore+40)/70+1` with a very negative
+  score), silently stopping the obstacle-spawn/movement loop entirely
+  (`for(i=0;i<ufoMaxObstacles;i++)` never running) - matching both
+  reported symptoms from one single root cause. **Fixed** by restoring
+  the reset (and the fire-sound trigger) as an explicit step in
+  `ufoPlayingTick()` itself, at the same point in the tick upstream's own
+  render call would have reached it. Not verified in the emulator, per
+  the user's explicit instruction - fixed, recompiled clean, and
+  rebuilt only.
+- `src/games/gameTinyDungeon.c` - Tiny Dungeon v2.0.1 (Sven B, contact
+  Lorandil@gmx.de - same author/contact as Tiny Minez, credited "SVEN B /
+  LORANDIL"; MIT License). The hardest, most-deferred port in this whole
+  project - a full C++ *class* combining a first-person raycaster-like
+  renderer with combat/dice/inventory/switches/teleporters, ~1400 lines
+  across `dungeon.cpp`+`bitmapDrawing.cpp`. Tiny Arena's own raycaster port
+  was picked earlier specifically to de-risk this one before attempting
+  it, and that de-risking held up: the "active" renderer (`bitmapDrawing.cpp`'s
+  `#else` branch - a disabled `#if 0` branch supports a fuller 0-7 view-
+  distance model but was never even compiled upstream) turned out to be a
+  small, fixed 24-entry lookup table of pre-drawn wall-segment placements
+  (view distances 0-3 only), not a runtime DDA raycast - maps directly onto
+  the same "compute one byte per (column,page), call md_drawColumn()" model
+  every other port here uses, no new machineDependent primitives needed.
+  `Dungeon`/`DUNGEON` converted to flat global state + `tdng*`-prefixed
+  functions (the same treatment already proven for Tiny Minez/Missile/Pipe/
+  Plaque/SQuest/DDug's own class hierarchies) - "tdng" instead of the
+  expected "td" prefix specifically to avoid colliding with Tiny Doc's own
+  pre-existing "td" prefix, caught immediately by a real redefinition
+  compile error, not a report. `getCellRaw()`'s raw `uint8_t*` pointer
+  arithmetic (`cell - _dungeon.currentLevel`) became a plain integer index
+  throughout instead. `NON_WALL_OBJECT`/`SIMPLE_WALL_INFO`'s own
+  `bitmapData`/`wallBitmap` fields are C pointers to other global bitmap
+  arrays baked into a PROGMEM static initializer - never attempted
+  anywhere else in this project and not proven safe under this dialect -
+  replaced with a small integer ID per table plus a resolver function
+  returning the *runtime* pointer (`int* tdngResolveBitmapArray(id)`),
+  confirmed safe by precedent (`gameTinyMinez.c`'s own `int* bitmap = ...`
+  dispatch) rather than guessed; only a pointer baked into a *static
+  initializer* was ever the actual untested risk. `gameLoop()`'s outer
+  `while(isPlayerAlive())` and `checkPlayerMovement()`'s inner
+  `while(!playerAction && !disableFlashEffect)` busy-wait both became an
+  explicit per-frame state machine - upstream's various "flash the screen/
+  monster/status bar" effects (teleporter/spinner XOR flash, hit-monster
+  inversion held through a busy-wait for Fire to release, retaliation-hit
+  inversion) all relied on `renderImage()` being called sparingly by hand;
+  since this engine redraws every real frame unconditionally, each flash
+  became its own explicit fixed-duration state (~200-250ms) instead of
+  relying on `renderImage()`'s own self-clearing side effect, which would
+  otherwise clear the very next engine frame (1/60s) instead of staying
+  visible. `getDice()`'s AVR-timer-based entropy source replaced with the
+  shared `arand()` helper, same as every other port's own RNG replacement.
+  Sound: real ATtiny85 hardware trades this game's own sound effects away
+  entirely for the dungeon-floor rendering feature (`settings.h` defines
+  `_ENABLE_DUNGEON_FLOOR_` and `NO_SOUND` together for that target - every
+  upstream sound function is a real no-op on real hardware) - this port
+  stays faithful to that shipped, silent behavior (floor rendering *is*
+  ported) rather than adding new sound effects Vircon32 could easily
+  afford; a real, cheap enhancement opportunity if ever requested.
+
+  **Data extraction was unusually failure-prone and needed two separate
+  fixes even after this project's own established byte-diff-everything
+  discipline.** All data (level grid, interaction/special-cell/monster
+  tables) uses enum-combining symbolic expressions (`SWITCH_L | N_S`,
+  `4 + 4 * LEVEL_WIDTH`) rather than plain literals - a Python evaluator
+  with the real enum constants defined was used to resolve these, not
+  hand-computed. The level grid's *first* extraction attempt (during an
+  earlier part of this same session, before a context-window compaction)
+  produced a badly corrupted result - not a subtle off-by-one but a
+  structurally wrong grid (most cells silently zeroed, switches/chests
+  simply absent from the cells the interaction/special-cell tables
+  expected them at) - caught only later, after the game was already
+  built and playable, via a *cross-validation* pass: computing
+  `cellValue & OBJECT_MASK` for every `currentPos` in the interaction
+  table against the actual level array and confirming it equals that
+  entry's own `currentStatus` (all 21 entries checked - all passed
+  cleanly except two toggle-pair "off" halves, which are supposed to
+  mismatch, and one entry at position 7 which references a cell the real
+  level data leaves empty even in a from-scratch re-verification against
+  the live source file - most likely a harmless orphaned/unreachable
+  puzzle-design leftover in the *original* game, not a porting error).
+  Re-extracted from a fresh, careful re-read of the live source file
+  (not the earlier scratch copy) and re-verified clean. **Generalizable
+  lesson**: for a level/world layout specifically (as opposed to a sprite/
+  sound table), byte-diffing the array's own element count isn't
+  sufficient proof of correctness the way it's been for every other
+  port's data tables - the real cross-check is whether *other* tables
+  that reference specific positions in it (interaction/special-effect/
+  monster-placement data) actually agree with what's really there,
+  since a corrupted-but-still-256-elements grid can pass a naive count
+  check while still being completely wrong.
+
+  **A second, genuine logic bug found via live user play** (reported as
+  "moves too fast in certain direction"): turning (Left/Right alone, no
+  movement/Fire) never transitioned into the post-action cooldown state -
+  upstream's own `playerAction=true` on a turn exits `checkPlayerMovement()`
+  the same as a move or interaction would, which is followed by the outer
+  loop's own `_delay_ms(200)` - but the ported state machine's turn-only
+  path fell through both the "reached new cell" and "fire pressed"
+  branches with no `else` case, so a held turn button re-processed every
+  real 60fps frame instead of pacing at ~5 turns/sec like every other
+  action here. Fixed by adding the missing `else if (playerAction)` branch
+  routing pure turns through the same `tdngBeginActionWait()` every other
+  action already uses.
+
+  **A genuinely new dialect-adjacent bug class for this project**: caught
+  by inspection before ever compiling, not by a report -
+  `getDownScaledBitmapData()`'s inner bit-scan loop is
+  `for (uint8_t bitValue=1; bitValue!=0; bitValue<<=1)`, relying on
+  `uint8_t` wraparound (`128<<1==0` on a real byte) to terminate after
+  exactly 8 iterations - Vircon32 ints don't wrap at 8 bits, so this would
+  have been a genuine infinite loop, not just a subtly-wrong result the
+  way every previous instance of this bug family (byte-truncation/shift-
+  wraparound/signed-sentinel/int8-overflow-reliance/logical-vs-arithmetic-
+  shift) had been - fixed with an explicit `bitValue<=128` bound from the
+  start. Two more latent-but-harmless-on-real-AVR-flash out-of-bounds
+  reads (same class as Tiny Arena's own `Lvl1` off-by-one) found and
+  clamped centrally by inspection: `maxObjectDistance` can default to
+  `MAX_VIEW_DISTANCE` (7) when no wall matches a column's line of sight,
+  overrunning the 4-entry scaling tables (clamped to 3); and
+  `dungeonFloor`'s own lookup can index one column past its 96-column
+  table when `mirror` is active and `x==0` (`floorX==96`, clamped to 95).
+
+  **CPU-load, found and fixed proactively across five real rounds**
+  (unlike most other ports here, which shipped once and got optimized
+  later if reported - this one needed the full pass *before* the port
+  could be called done, since the first playable build was reported
+  hitting a saturated, truncating-frames 100% even at rest): (1) hoisted
+  the wall/object "is there really a matching cell here" search - which
+  only depends on player position/direction, not on which of the 96
+  columns is currently rendering - out of the per-column loop into a
+  once-per-frame precompute pass (`tdngPrepareVisibleWalls()`/
+  `tdngPrepareVisibleObjects()`), the same "self-gated call still costs a
+  full call every time it's invoked" lesson this project has hit
+  repeatedly, just at a larger scale (up to 24 wall entries x 96 columns,
+  or 3 distances x 11 objects x 3 offsets x 96 columns); (2) converted
+  those lookups into short compact lists (typically a small handful of
+  real matches, not the full 24/99) instead of a same-size boolean table
+  still scanned in full every column; (3) hoisted the several object/
+  distance-constant fields `getDownScaledBitmapData()` recomputed on
+  every one of its 16 calls per column (8 rows x mask+bitmap) into a
+  `tdngPrepareScaledBitmap()` step called once per drawn object per
+  column instead; (4) row-range-gated the same function's own call sites
+  to the object's real vertical range (as narrow as 2 of 8 rows for a
+  distant object) instead of always calling for all 8 and letting the
+  callee's own internal check absorb the waste; (5) merged the separate
+  mask-scan and bitmap-scan calls (which walk the identical bit range,
+  differing only in which half of the source array they read) into one
+  combined pass, and resolved each object's bitmap array via a *runtime*
+  pointer once per column instead of re-running a 10-way if/else dispatch
+  on every single byte read inside the scan's own inner loop - confirmed
+  by the user's own live testing that visible sprites (doors/monsters/
+  chests), not bare wall-only views, were specifically the dominant
+  remaining cost, which is exactly what round 5 targeted. Measured (not
+  assumed) via the WebGL perf overlay throughout: a previously-truncated
+  frame (missing the far wall and the entire dashboard, direct visible
+  evidence of exceeding the 250,000-cycle/frame budget) rendered
+  completely after these fixes, and an idle/no-visible-object scene
+  dropped from a saturated 100% to 85%; a close-up monster/sprite view can
+  still spike to 100% in this build. Further reduction from here would
+  need a materially bigger restructuring (e.g. pre-rendering each visible
+  sprite's whole scaled bitmap once per frame into a buffer instead of
+  per-column bit-scanning) rather than another incremental pass - flagged
+  as a known open item rather than silently left unmentioned, consistent
+  with this project's own standing practice (e.g. Tiny Bert's accepted
+  ~70-76% baseline) of being honest about a measured ceiling instead of
+  overclaiming a fix.
+
+  Menu thumbnail: the existing 4x7 grid (28 cells, exactly full) grew an
+  8th row (1024x896 -> 1024x1024, landing exactly at Vircon32's hard
+  texture-dimension cap) rather than needing a full reshuffle, matching
+  every earlier grid-growth precedent in this file - verified via
+  screenshot that the new thumbnail (the corridor+bars-gate view, credited
+  "BY SVEN B / LORANDIL") displays correctly when selected and a spot-
+  checked neighboring thumbnail (HollowSeeker) is untouched.
+
+  **Not yet independently re-verified after the fixes above** (budget/
+  time ran out this session, flagged honestly rather than silently
+  assumed working): the exact browser-automation test sequence used to
+  confirm the bars-gate-removal switch's *visible* effect kept landing the
+  player one cell short of the intended target despite the underlying
+  interaction logic being independently proven correct via an offline
+  Python re-simulation of the identical algorithm against the verified
+  level data (all 21 interaction entries' toggle pairs check out) - most
+  likely a Puppeteer key-repeat/timing artifact in the *test script*
+  itself rather than a genuine game bug, but this was not conclusively
+  re-confirmed in-engine before time ran out. Chest-opening, teleporters/
+  spinners, monster combat (attacks-first vs. player-attacks-first,
+  death/treasure), the fade-in/fade-out death sequence, and the victory
+  fountain were ported following the exact same faithful logic pattern as
+  every already-cross-validated switch/chest interaction, but were not
+  each individually exercised live this session either - worth a direct
+  playthrough check in a future session before considering this port
+  fully proven, the same way most other games here only reached that bar
+  after actual extended play uncovered their own remaining bugs.
+- `src/games/gameFrogger.c` - Frogger (Andy Jackson, 2015-2017, non-
+  commercial-with-attribution; ATtiny-Joypad port by Billy Cheung, 2018;
+  artwork by @senkunmusashi). A classic Frogger clone (3 scrolling river
+  rows, 3 scrolling road rows, 5 docks) - the second game from `more
+  games/gametiny/` (after Wren Rollercoaster), picked via the same "least
+  tokens to port" survey now that every tinyjoypad.com-proper title is
+  shipped. Not `tinyJoypadShim`/`obonoCoreShim` lineage by name, but -
+  matching Tiny Lander's/Wren's own precedent - needed no new shim: Billy
+  Cheung's own header comment documents the identical A0/A3/fire-pin
+  thresholds every other game here uses. The `ISR(PCINT0_vect)` fire-
+  button interrupt was converted to a plain polled `isFirePressed() &&
+  !frgClickLock` check, the same "no real async interrupts on Vircon32"
+  treatment every other ISR-based upstream driver here has needed.
+  **The riskiest structural piece**: `drawGameScreen()`'s own render logic
+  is a genuinely *stateful, sequential byte-stream cursor* (a "wraparound
+  tail / 15 grid columns with an embedded frog overlay / wraparound head"
+  structure per scrolling row, alternating direction row-by-row) rather
+  than a closed-form per-column query function the way most other games'
+  simpler object composites allow - ported as a **direct structural
+  mirror** (`frgComputeGameRowLeft`/`frgComputeGameRowRight`, walking the
+  exact same loop shape into a `frgGameRowBuf[128]` cursor buffer) instead
+  of trying to invert the logic into a stateless formula, since faithfully
+  copying an intricate stateful algorithm's own shape carries far less
+  risk than re-deriving an equivalent closed form from scratch.
+  **A genuine VRAM-persistence undershoot, found by literally counting
+  bytes upstream's own loop emits** (not from a report): each row-composite
+  sends exactly `(7-shift) + 15*8 + shift = 127` bytes to a 128-column
+  page - one byte short, by design it looks like (trading one column of
+  scrolling precision for a simpler wraparound split) - meaning column 127
+  is never written by this function on real hardware (and, when the frog
+  is actively hopping across a traffic row, the padding+frog+padding
+  branch undershoots by a further byte for that one frame). Fixed the same
+  way as every prior game with this bug class (Pinball/Doc/Bert/Tris/Pipe/
+  Plaque): `frgGameRowBuf` is always padded out to the full 128 columns
+  with a background byte after the real cursor-driven writes finish.
+  Font remap formula re-derived directly from this game's own
+  `font6x8AJ2.h` rather than assumed from Wren's last one - looks similar
+  but the final bracket differs (`c-=9` here vs Wren's `c-=6`). Data
+  tables extracted via the established Python script; the extraction
+  script's first pass didn't understand the `#ifdef SMALLLOGS ... #else
+  ... #endif` wrapped around the log sprites (SMALLLOGS is commented out
+  upstream, so only the `#else` "bigger logs" branch actually compiles),
+  grabbing both branches and yielding 144 values instead of the correct
+  120 - caught by the count not matching `bitmaps[15][8]`'s own expected
+  size, fixed with a second pass that explicitly strips the inactive
+  branch before re-extracting - a new pitfall for this project's own
+  "byte-diff everything" discipline (naive comment-stripping doesn't
+  understand preprocessor conditionals). `beep(bCount,bDelay)` ported via
+  a heuristic mapping like Wren's own, but rescaled differently - this
+  game's own bDelay values range much wider (0-1000 vs Wren's ~0-700,
+  already mostly clamped), so reusing Wren's exact `255-bDelay` formula
+  verbatim would have clamped almost every one of this game's 8 real sound
+  sequences to the same floor pitch, losing all tonal variation; rescaled
+  bDelay into a 0-250 band first instead. 8-bit-vs-32-bit audit came back
+  clean - no shift operators anywhere in the file and no `0xFF`-as-signed-
+  sentinel tricks, the only genuine byte-truncation-reliant site
+  (`frgByteVal`'s `~fill`) already needed and got the standard `&0xFF` fix
+  from the start.
+  **Three real bugs found via live testing/direct user report, all fixed
+  via code inspection only**:
+  1. *"the cars and logs move very slowly... does not seem to be a 100%
+     CPU thing"* - the exact same bug class as Tiny Arkanoid's own
+     ~8x-too-slow ball/paddle bug: upstream's `interimStep` counts raw
+     bare-AVR-loop iterations (thousands/sec on real hardware, gated only
+     by two `analogRead()` calls' own real time cost) - far faster than
+     this port's 60Hz `update()`. Unlike Arkanoid, only `interimStep`
+     itself needed decoupling here, not the whole tick body - the click
+     debounce (`frgClickBase`/`frgTickCounter`) already mirrors upstream's
+     own genuine `millis()`-based wall-clock timer, which advances at real
+     time regardless of loop speed, so it was left alone. Fixed with a
+     `FRG_INTERIM_STEP_RATE` multiplier (a best-effort estimate, not a
+     precisely measured value - documented as such in the code, same as
+     Arkanoid's own approximation) added to `interimStep` once per real
+     frame instead of a bare `++`.
+  2. A font-substitution bug caught by screenshot review (not a user
+     report): the attract screen's credit line showed
+     "**:**senkunmusashi" instead of "**@**senkunmusashi". Root cause:
+     `font6x8AJ2.h`'s own comment says "@ in place of z" - the special
+     "@"-shaped glyph lives at the **'z'** character's slot in the
+     truncated font table, and upstream's own source string is literally
+     `"zsenkunmusashi"` (relying on that substitution), not
+     `"@senkunmusashi"`. Using the literal `@` character instead ran
+     through `frgCharIndex`'s own remap formula and landed on font index
+     14 (`:`) rather than index 63 (the real `z`/`@` slot) - confirmed by
+     tracing the formula by hand for both characters before fixing.
+     Fixed by using the string `"zsenkunmusashi"`, matching upstream
+     exactly rather than "helpfully" substituting the visually-intended
+     character.
+  3. A requested optimization pass (not a correctness bug) found two
+     minor, low-risk wastes: `frgComputeDockByte(x)` ran its full 5-dock
+     scan for every one of the ~58 columns that can never match any dock
+     (fixed with a single outer bound `x<3||x>=113`), and
+     `frgComputeBottomByte`/`frgNumberByte` both independently recomputed
+     `frgScore`'s digit count on every one of the 128 columns/frame for an
+     unchanging value - fixed by caching it once per frame
+     (`frgScoreDigits`, refreshed in `frgRenderPlaying()`). Both are minor
+     relative to the game's already-efficient row-buffer composite (each
+     row computed once per frame, not per pixel, from the start - unlike
+     several earlier ports, this one didn't need an O(pixels x objects)
+     retrofit at all).
+  4. **A fourth bug, found via direct user report right after the above
+     round shipped**: "when a player falls in the water/dies there is a
+     frog display all the way on the left as if the blinking happens on
+     the wrong X coordinate." Diagnosed via code inspection only, per the
+     user's own explicit instruction not to test this one in the emulator
+     - `frgFrogXStart(screenRow)` (the shared helper mirroring upstream's
+     `drawFrog()` position formula, reused by the `frogColumn==0` overlay,
+     the start-row frog, and the death-animation blink) had a plain
+     transcription slip: upstream's real formula is `frogColumn*8 + 7 -
+     blockShiftL` (river rows 1/3) or `frogColumn*8 + blockShiftR` (row
+     2) - multiplying the frog's actual column by 8 and adding the shift
+     offset - but the ported version had `0*8 + 7 - frgBlockShiftL` and
+     `0*8 + frgBlockShiftR`, a literal `0` where `frgFrogColumn` belonged.
+     This coincidentally produced the right answer for the one call site
+     it was originally reasoned through (the `frogColumn==0` special-case
+     overlay, where the real column genuinely is 0) but was silently wrong
+     for every other caller - most visibly the death-animation blink,
+     which force-draws at the frog's actual death position regardless of
+     column, so a frog dying anywhere but column 0 blinked at x=0 (the far
+     left edge) instead of its real position. Fixed by using
+     `frgFrogColumn*8` in both branches instead of `0*8`. Confirmed by
+     re-tracing the formula against the .ino source only, then rebuilding
+     (compile only, not run) to confirm it still compiles clean - no
+     emulator verification performed for this fix, per the user's explicit
+     instruction.
+  Verified via Puppeteer (before the fourth bug's own report, which was
+  diagnosed and fixed via code reading only per direct user instruction):
+  attract screen (title art + credits, both correct after the font-string
+  fix), a full playing session (docks, river/road scrolling at the
+  corrected pace, HUD score/lives), and an incidental full collision/
+  death/life-loss/respawn cycle (triggered naturally by hopping into the
+  river without lining up on a log) - that same session's own screenshots
+  weren't scrutinized closely enough at the time to catch bug 4 above by
+  eye, only caught once the user reported it directly. Level-up/dock-fill
+  and the full game-over/new-high sequence were not separately forced-
+  tested - ported directly from upstream's own logic with the same state-
+  machine treatment already proven correct elsewhere, but worth a specific
+  check if reported as off.
+
+## CPU-load investigation: Tiny Invaders/Bomber/Pacman hitting ~100%
+
+The user reported these three (all `tinyJoypadShim`-lineage, Daniel-C-style
+ports) visibly maxing out CPU load in the emulator, while the
+`obonoCoreShim`-lineage games (NumberPlace/HollowSeeker/t2048) and Tiny
+Pinball didn't. Investigated by reading the actual emulator engine source
+(`C:\github\WebEmulator\DesktopEmulator\ConsoleLogic\V32Console.cpp` /
+`V32CPU.cpp`, not just this project's own code) rather than guessing:
+
+- **What "100% CPU" precisely means**: Vircon32 runs at a hard 15 MHz /
+  60 fps budget = exactly `Constants::CyclesPerFrame` = 250,000 CPU cycles
+  per frame. `V32CPU::RunNextCycle()` shows each cycle is **exactly one
+  instruction** - no variable per-opcode cost, so cycles and instructions
+  are the same number. `V32Console::RunNextFrame()` runs a loop capped at
+  that count and reports `CPULoad = cycles_used / 250000` - and critically,
+  if a frame's work doesn't finish inside that budget, the loop **just
+  stops mid-instruction-stream**; the rest of that frame's logic silently
+  never runs. So "100%" isn't only a slowdown risk, it's a real risk of
+  truncated per-frame game logic. Any C statement/function call directly
+  costs real instructions - there is no free-tier work here.
+- **Root cause**: `bomTinyFlip()`/`pacTinyFlip()`/`tinvTinyFlip()` all loop
+  over every one of the 1024 pixels (128x8) and, per pixel, call several
+  compositing functions. For Bomber/Pacman specifically, the sprite-
+  compositing function (`bomSpriteWrite`/`pacSpriteWrite`) re-looped over
+  all 5 sprites *at every single pixel* - O(1024 x 5) sprite-lookups a
+  frame, each with real per-call overhead (params, stack frame). Compare
+  `obonoCoreShim.c`'s `drawSprites(y)` (used by the games that *don't* hit
+  the ceiling): it composites once **per page** (8x/frame), with an early
+  `continue` per sprite that doesn't overlap that page, and writes whole
+  pixel runs directly - roughly 150x fewer sprite-lookup operations a
+  frame. This per-pixel shape was inherited straight from upstream's AVR
+  code, which had to stream one SSD1306 byte at a time (its *only* way to
+  talk to that display) - a constraint that doesn't exist on Vircon32, so
+  porting the loop verbatim carried over cost the original platform forced
+  but this one doesn't need.
+- **Fix, `gameTinyBomber.c`/`gameTinyPacman.c`**: replaced
+  `bomSpriteWrite(x,y)`/`pacSpriteWrite(x,y)` (called once per pixel) with
+  `bomCompositeSprites(y)`/`pacCompositeSprites(y)` (called once per page),
+  which iterate each of the 5 sprites *once* and, only if that sprite
+  overlaps the current page row, write its up-to-8 occupied columns
+  directly into a new `bomPageBuffer[128]`/`pacPageBuffer[128]` global via
+  the same Decalagey shift-split math the old per-pixel version used - same
+  exact output, O(5 x 8) per page instead of O(128 x 5). The main pixel
+  loop now just reads that pre-filled buffer instead of calling the sprite
+  function again per column. (Pacman's version also had to preserve the
+  `pacInGame == 0 && spriteNumber == 0` player-suppression check and the
+  ghost "gobbled" frame-offset math exactly, both moved as-is into the new
+  per-sprite block.)
+- **Fix, `gameTinyInvaders.c`**: different shape of problem here - its
+  monster grid is already addressed via direct coordinate division
+  (`tinvOuDansLaGrilleMonster`), not a re-scanned list, so there was no
+  O(pixels x objects) blowup to fix. Its cost instead comes from 8 layer
+  functions called unconditionally on *every* row, when 5 of them
+  (`tinvLivePrint`/`tinvVessoFn` only draw on `y==7`, `tinvUFOWrite`/
+  `tinvDisplayText` only on `y==0`, `tinvMyShield` only on `y==6`) already
+  internally no-op on every other row. Gated those 5 calls behind the
+  matching `y ==` check directly in `tinvTinyFlip()`'s pixel loop instead
+  of always calling in and immediately returning 0 - cuts those 5 layers'
+  call count by 7/8 (5120 calls/frame down to 640) for zero behavior
+  change (verified byte-for-byte identical rendering against the
+  unmodified version - see below). Also converted `tinvWriteMonster14()`'s
+  `while(x>=14) x-=14;` loop to a plain `x % 14` (safe since `x` is only
+  ever called non-negative here).
+- **Fix, shared across all three**: `bomBoolRead`/`bomBoolWrite0`
+  (Bomber's destructible-block bitmap) and `checkDotPresent`/
+  `pacDotsDestroy` (Pacman's dot bitmap) all used a repeated-subtraction
+  `while` loop to compute `numero/8` and `numero%8` - a real division
+  avoided only because AVR-GCC had no cheap division instruction. Vircon32
+  has real integer division, so replaced each with plain `/`/`%` - O(1)
+  instead of up to ~13 loop iterations, with an explicit `numero < 0`
+  guard added first (matching what the loop already did for negative
+  input by accident) so the division can't produce an out-of-bounds
+  array index.
+- **Verification**: rebuilt after each change and screenshot-tested actual
+  gameplay (not just title screens) for all three games. One scare during
+  this: Tiny Invaders' background art includes a dithered, radially-
+  patterned decorative graphic near the bottom-left of the play field that
+  looks exactly like the kind of static/garbage corruption seen in this
+  project's earlier real bugs - reverted the `tinvTinyFlip()` change
+  temporarily and reproduced the *identical* pattern from the *unmodified*
+  code with the same input sequence, proving it's pre-existing background
+  art rather than a regression, before restoring the optimization. Worth
+  remembering: this pattern is legitimate and expected, not a bug, if seen
+  again during future Tiny Invaders work.
+- **v32opt (separate, orthogonal lever - not yet shipped)**: this
+  project's own `Make.sh`/`Make.bat` already had a hook for
+  `v32opt` (see Prior Art below), a real post-compile assembly optimizer
+  (dead-code elimination, function inlining, register promotion) that was
+  simply never on `PATH`. Since cycles==instructions here, any inlining/
+  DCE it does directly lowers measured CPU% with zero source changes.
+  Copied a pre-built `v32opt.exe` (from the sibling
+  `crisp-game-lib-portable_vircon32` project) onto `PATH` at
+  `C:\utils\Vircon32\DevTools\v32opt.exe` and confirmed
+  `v32opt obj/main.asm obj/main_opt.asm -v -O3` runs cleanly against this
+  project's full `main.asm` (268 optimizations applied: 77 inlined
+  functions, 46 dead functions removed, plus algebraic/forwarding/strength-
+  reduction passes) - but the current shipped build was **not** built with
+  it (`SKIP_V32OPT=1` was used for every build in this session after this
+  point) - the visual scare above was investigated with v32opt in the
+  build initially, which understandably raised suspicion of it, but since
+  the same pattern was later proven to be pre-existing/unrelated, v32opt
+  itself was never actually confirmed guilty *or* innocent - it just never
+  got a clean re-test after that finding. Re-verify it independently
+  (screenshot-test all 7 games with a `-O3` build) before shipping it.
+
+### Second pass: Pacman fixed, Invaders/Bomber still over budget
+
+The per-page sprite-compositing rewrite above resolved Pacman entirely
+(confirmed by the user - also incidentally explained a "movement feels
+faster now" observation: `V32Console::RunNextFrame()`'s cycle-budget loop
+doesn't reset the CPU's instruction pointer when it runs out of budget -
+it just resumes next real 60Hz tick from wherever it stopped - so an
+over-budget frame doesn't corrupt anything, it just silently stretches
+one logical game-frame across 2+ real frames' worth of wall-clock time.
+Pacman wasn't running *fast* after the fix, it was running *finally at
+its intended speed* - it had been in AVR-independent, engine-level slow
+motion before). Invaders and Bomber were still reported over budget, so
+went another round on each - same read-the-actual-emulator-source-first
+approach, but this time looking for redundant *per-pixel* recomputation
+of values that don't actually change per-pixel, rather than the
+O(pixels x sprites) shape the first pass fixed:
+
+- **`gameTinyBomber.c`, `bomBlockBomb()`**: `bomBlocDetect[x]` groups many
+  consecutive x columns under the same value (an x-group of the
+  destructible-block grid), so `bomBoolRead(blocVal + (y-1)*15)` returns
+  the *same* answer for every x in that group at a given y - it was being
+  recomputed from scratch for all ~896 relevant pixels/frame regardless.
+  Added a tiny single-entry cache (`bomBlockCacheY`/`bomBlockCacheVal`/
+  `bomBlockCachePresent`) that only re-runs `bomBoolRead()` when either
+  changes from the last pixel checked - safe because
+  `bomBlocBombMem` (the underlying destructible-block bitmap) can only
+  change via `bomDestroyBloc()`, which runs during the update-logic half
+  of the frame, strictly before `bomTinyFlip()` renders - never mid-render.
+- **`gameTinyBomber.c`, `bomTinyFlip()`**: `bomPrintLive()` (only ever
+  non-trivial for `x` in 1-7), `bomBombBlitz()` (only ever draws on the
+  bomb's own row) and `bomExplose()` (only ever draws within 1 row above/
+  below an *active* explosion) were all called unconditionally for every
+  one of the 1024 pixels/frame, each just to immediately return a no-op
+  for the vast majority of them. Precomputed per-*row* (not per-pixel)
+  whether `bomBombBlitz`/`bomExplose` can possibly apply this row at all
+  (`bombBlitzThisRow`/`explodeThisRow`), and gated `bomPrintLive`'s call
+  behind its own already-cheap `x` bounds check done in the caller instead
+  of inside the callee - same "don't pay a full function call for a
+  guaranteed no-op" reasoning as Invaders' row-gating in the first pass.
+- **`gameTinyInvaders.c`, `tinvMurgeSplitUpDown()`**: unlike Bomber/
+  Pacman's flat sprite list, Invaders' monster grid is already addressed
+  by direct division (`tinvOuDansLaGrilleMonster`), so there was no
+  O(pixels x objects) scan to fix here - but the grid-cell lookup
+  (`MonsterGrid[gridY][gridX]`) and its derived "anims" value *were* being
+  recomputed on every single pixel, even though `PositionDansGrilleMonsterX`
+  only changes once every ~14 columns (a monster sprite's width) and
+  `PositionDansGrilleMonsterY` is constant for the whole row. Added a
+  small cache keyed on `(gridX, gridY)` (`tinvMonsterCacheX/Y` +
+  the cached spriteType/anims for both the current row and the row above,
+  since the "split sprite across two page rows" branch needs both) -
+  the actual `tinvMonsters[]` bitmap byte read still happens per-pixel
+  unchanged (that part *is* genuinely different every column), only the
+  grid-membership lookup feeding it is now shared across the ~14-pixel
+  cell instead of repeated for each column in it.
+- **Verification**: same approach as the first pass - rebuilt, screenshot-
+  tested actual gameplay (monsters descending/splitting across page-row
+  boundaries for Invaders, since that exercises every branch of the new
+  cache; player/enemies/blocks/explosion for Bomber) rather than trusting
+  the diff alone, since both changes touch per-pixel rendering math where
+  an off-by-one is easy to introduce and easy to miss by inspection.
+- **Not yet done**: no fresh CPU% measurement exists yet to confirm these
+  two now stay under budget (same caveat as the first pass - no in-browser
+  CPU meter is exposed; would need the native desktop emulator's
+  `performance-display` overlay, already enabled in
+  `C:\utils\Vircon32\Emulator\Config-Settings.xml`, to check numerically).
+  Ask the user to confirm in real play before assuming these are fully
+  resolved, the way Pacman's fix already was.
+
+### Third pass (much later session): call-site gating for tinvMonster/tinvMyShoot/tinvMonsterShoot, using the new perf overlay
+
+Requested audit ("verify tiny invaders for optimizations, only during
+actual gameplay") using the WebGL perf overlay this project built for the
+Tiny Doc/Missile investigations. `tinvTinyFlip()`'s per-pixel loop still
+called `tinvMonster(x,y)`, `tinvMyShoot(x,y)`, and `tinvMonsterShoot(x,y)`
+unconditionally for all 1024 pixels/frame - each of the three already
+self-gates internally to a narrow match (the monster grid's own bounding
+box for `tinvMonster`; a single exact `(x,y)` pixel each for the two shot
+functions, matching their own equality checks against the shot's current
+position) - the same "self-gated function still costs a full call every
+time it's invoked" cost this project has found repeatedly in other games,
+just never applied here since Invaders' render loop predates that lesson.
+
+Fixed by precomputing, once per row (not per pixel): the monster grid's
+valid Y range and X range (`monsterRowValid`/`monsterXMin`/`monsterXMax`,
+from `MonsterGroupeXpos`/`MonsterGroupeYpos` - the same bounding box
+`tinvOuDansLaGrilleMonster()` already checks internally), and the exact
+row each shot currently occupies (`myShootRowMatch`/`monsterShootRowMatch`,
+from `MyShootBall`/`MonsterShoot[1]/2`) - then gating each call to exactly
+that already-existing condition, narrowed further to the exact matching
+column for the two shot functions. This is a literal duplicate of each
+function's own internal check, not an approximation, so it cannot change
+*which* pixel ends up drawn or *when* a collision side effect fires -
+`tinvMyShoot()`'s embedded `tinvMonsterAttackCheck()`/`tinvUFOAttackCheck()`
+calls (see the fifteenth lesson on embedded render-logic) still happen at
+the exact same single pixel as before, just without scanning the other
+~1023 pixels/frame that were guaranteed to return 0x00 with no side
+effect. Confirmed safe by tracing every place `MonsterGroupeXpos/Ypos`,
+`MyShootBall(xpos)`, and `MonsterShoot[]` are mutated - none of it happens
+anywhere else during this same render pass, so the once-per-row
+precomputation can't go stale mid-frame the way a naive cache might.
+
+**Verified two ways**: (1) gameplay screenshots across an active
+move+shoot sequence showed correct rendering throughout (monster
+formation, shields, background dithering, ship) and correct game-state
+effects (score climbed from 0 to 60, monster formation visibly thinned
+from 6x4 to 4 remaining, matching real kills registering); (2) measured,
+not just applied on theory - a temporary side-by-side comparison (same
+input sequence, gated vs. a temporarily-reverted "call everything
+unconditionally" baseline) showed the baseline pegged at 100% CPU for 7
+of 8 samples (one dip to 24%), while the gated version dropped below
+100% more often (three distinct low readings out of 8 samples) - a real,
+if imprecisely-quantifiable-by-the-0-100-clamped-meter, improvement,
+consistent with the halved rough call count (background+drawColumn calls
+are unavoidable; monster calls dropped from 1024 to ~420/frame, shot
+calls from 1024 each to ~1 each/frame).
+
+## Frame-pacing pass: matching each game's original logic-tick rate
+
+The user asked whether the original TinyJoypad games ran at 30fps and, if
+so, whether the ports should skip every other real frame to match -
+raising a real concern from the Vircon32 author's own guidance (paraphrased
+from a Discord exchange the user relayed): a game whose *logic* only ticks
+once every few real frames must not use a plain single-frame edge check
+(`button == 1`) for "just pressed," since a press landing on a skipped
+frame would already read as a higher value by the time the next tick
+samples it - the fix is checking the button's raw held-frames counter is
+in `[1, window]` instead of `== 1`.
+
+**Investigation first, before touching any code**: read every shipped
+game's actual upstream `.ino` for its real frame-pacing mechanism (see
+`more games/`), rather than assuming a uniform "they were all 30fps."
+Found three genuinely different categories:
+- **Genuine fixed-rate throttle** (logic+redraw together, one real
+  `millis()`-based delay per loop): NumberPlace (`FPS=20`), HollowSeeker/
+  t2048 (`FPS=30`), Tiny Doc (`FPS_Count_TD(33)`, ~30fps). These four
+  really did run at a fixed rate on real hardware.
+- **Redraw throttled, logic decoupled and uncapped**: Pacman/Bomber (44ms
+  redraw gate, logic ran every loop iteration - already fixed earlier this
+  project by decoupling render from tick), Tiny Arkanoid (no real-time
+  delay at all, paced by a free-running `Frame` byte - already fixed by
+  *speeding up* logic 8x/frame to match real hardware's actual bare-loop
+  speed, the opposite direction from a slowdown).
+- **No timing model whatsoever upstream**: Tiny Trick, Tiny Invaders, Tiny
+  Pinball, Tiny Bert, Tiny Tris ran at whatever raw, undocumented speed the
+  bare AVR loop achieved.
+
+Given this split, blanket "skip every other frame" only makes sense for
+the first group - the other two already have deliberate, previously-
+verified pacing decisions (Arkanoid's speed-up in particular would be
+directly undone by adding a slowdown on top).
+
+**Shared mechanism added** (`machineDependent.h`/`portVircon32.c`):
+- `md_input{Left,Right,Up,Down,Fire}Frames()` - raw signed held-frame
+  counters straight from Vircon32's own `gamepad_*()` registers (positive
+  N = held for N real frames, negative N = released N real frames ago;
+  confirmed by reading the emulator's own `V32GamepadController.cpp`, not
+  guessed). `md_inputFireFrames()` also owns the existing input-fire-gate
+  transition (`md_inputFire()` is now defined in terms of it) so there's
+  one source of truth for what "gated" looks like.
+- `md_recentlyPressed(framesValue, window)` (a macro in machineDependent.h,
+  matching the existing `circulate()` macro convention in
+  obonoCoreShim.h rather than introducing a header-defined function) -
+  `framesValue >= 1 && framesValue <= window`, the safe replacement for a
+  plain `== 1` edge check in any game whose logic ticks once every
+  `window` real frames.
+- `obonoCoreShim.c`'s `updateButtonState()` gained a `tickWindow` parameter
+  and a new `justPressedState` (built from the windowed check per
+  direction/fire) - `isButtonDown()` now reads `justPressedState` instead
+  of a plain `buttonState`/`lastButtonState` XOR, fixing exactly the
+  "tap landed on a skipped frame" risk for NumberPlace/HollowSeeker/t2048.
+
+**Shipped - whole-function tick-skip** (matches each game's genuine
+original rate exactly, since every existing internal timer in these games
+was already tuned in "ticks" against that same real rate upstream, so
+throttling to match needs zero rescaling): NumberPlace (`NP_TICK_DIVISOR`
+= 3, `NP_FPS` changed 60->20), HollowSeeker (`HS_TICK_DIVISOR` = 2,
+`HS_FPS` 60->30), Tiny Doc (`TD_TICK_DIVISOR` = 2, no existing `_FPS`
+constant to rescale - its own tick-counted timers were already tuned
+against upstream's real 30fps tick verbatim). Each game's `_update()`
+increments a counter and returns immediately (no redraw call at all)
+until it reaches the divisor, then resets and runs its full body - the
+same "just skip the whole draw call, previous frame persists" trick this
+project's dirty-flag caching already relies on elsewhere. Verified via
+Puppeteer, including a rapid 3-tap sequence on the highest-risk case
+(edge-triggered tile moves via `isButtonDown()`) registering as 3 distinct
+moves with no lost or duplicated input.
+
+**t2048 - throttled, then reverted per direct user request.** Initially
+given the same whole-function `T2048_TICK_DIVISOR`=2/`T2048_FPS`=30
+treatment as the other three genuine-rate games (verified working
+correctly, including the same rapid-tap edge-trigger safety check).
+Later reverted after the user reported it "plays faster/nicer" without
+the throttle - `T2048_FPS` restored to 60, `T2048_TICK_DIVISOR`/
+`t2048TickSkipCounter` removed entirely, `updateButtonState()` called
+with a plain `1` (an unthrottled tick window, matching every other
+non-throttled `obonoCoreShim` call site) instead of the divisor. Verified
+via Puppeteer that tile sliding/merging/scoring all still work correctly
+post-revert. Unlike Tris's revert (which uncovered and left behind a
+real pre-existing bug), this one had no known defect - it was a pure
+preference call, the throttled version played "correctly" by every
+measure applied, just less enjoyably.
+
+**Shipped - movement-only throttle** (Trick/Invaders/Pinball/Bert): these
+four have no genuine original rate, but *do* have existing wait/blink/
+animation timers this port itself invented assuming a tick happens every
+real 60fps frame (e.g. Tiny Trick's own `trkWaitFrames = 36; // ~600ms at
+60fps`) - a whole-function throttle would have silently doubled every one
+of those real-time durations as a side effect. Instead, each game's own
+movement/physics/AI/collision step is gated to run every 2nd real frame
+(the same decouple-logic-from-redraw approach already used for Arkanoid),
+while the render call stays outside the gate, called every real frame for
+smooth visuals:
+- **Tiny Trick** (`TRK_MOVE_DIVISOR`): paddle/puck physics, AI direction,
+  collision, and the fire-kick check gated together; `trkTinyFlip()`
+  unconditional.
+- **Tiny Invaders** (`TINV_MOVE_DIVISOR`): `tinvUpdatePlaying()` (monster/
+  UFO/shot movement, collision, scoring) gated; the `else` branch calls
+  `tinvTinyFlip()` alone on skipped frames (confirmed side-effect-free to
+  call redundantly). The `tinvWaitFrames`-based wait/flash states are
+  untouched - real-time timers, not movement.
+- **Tiny Pinball** (`TP_MOVE_DIVISOR`): `tpBallUpdate()` plus the spring-
+  charge and flipper-trigger logic gated together (kept in the same tick
+  as the ball physics they interact with); `tpTinyFlip2()` and the ball-
+  falls-off-bottom check stay outside the gate.
+- **Tiny Bert** (`BERT_MOVE_DIVISOR`): jump input, AI movement/death,
+  collision gated; `bertAnimLift`/`bertInterlace` (cosmetic-only animation
+  counters, not movement) deliberately left ungated to keep their
+  originally-tuned blink speed; `bertTinyFlip()` unconditional.
+
+Verified all four via direct Puppeteer play tests (single-tap jump/shot/
+flipper/launch-charge sequences) - correct single-response behavior, no
+lost input, no double-triggers.
+
+**Tiny Tris - attempted, found a real bug, reverted per explicit user
+request; left completely untouched.** The movement-only throttle was
+applied here too at first, but the user reported the falling piece "drops
+a few frames then pauses... not a linear drop." Investigated with a
+temporary on-screen instrument tracking the real-frame gap between
+consecutive `trisYy` changes (not sampled screenshots, which alias against
+the actual period) - confirmed a genuine, reproducible bug: drops are
+normally evenly spaced, but periodically stall for ~11x longer than
+normal. Root-caused to a beat-frequency interaction between two
+independent counters in `trisControle()`: `trisDropTrig` (the "want to
+fall" trigger) only decrements while the piece sits at a grid-aligned
+position (`trisOuSuisJeYEngaged==0`, itself just `trisYy % 3`), while
+`trisDropSpeed` (the "may I move now" gate) decrements unconditionally
+every tick on its own independent cycle. When `trisDropTrig` fires while
+aligned but `trisDropSpeed` isn't *also* 0 that same tick, the fall
+intent is silently discarded - `trisMovePiece()` unconditionally clears
+`trisDeplacementYy` once realigned, regardless of whether the move
+actually applied - forcing `trisDropTrig` to retry an entire fresh
+`trisLevelSpeedAdj`-tick cycle, sometimes several times before the two
+phases happen to coincide again. **Confirmed via the upstream `.ino`
+(`tiny-tris_v3.ino`'s `CONTROLE_TTRIS`/`Move_Piece_TTRIS`) that this exact
+dual-counter shape is original, byte-for-byte identical upstream code, not
+a porting mistranslation** - the stall exists on real hardware too, just
+proportionally shorter (and easy to miss) at whatever raw, uncapped speed
+the bare AVR loop actually ran. A one-line fix (force `trisDropSpeed = 0`
+whenever `trisDropTrig` fires, guaranteeing the same-tick apply) was
+tried and, after a debugging detour (the fix appeared to freeze the piece
+entirely - actually the *very next* line in the same function
+unconditionally resets `trisDropSpeed` back to `trisLevelSpeedAdj`
+whenever it reads 0, silently clobbering the forced value before
+`trisMovePiece()` ever saw it - a reminder to trace a one-line fix through
+every subsequent statement in the same function, not just the block it's
+in) - re-traced by hand and confirmed correct, but the user asked to
+revert *all* of it rather than ship a fix mid-session, including the
+30fps whole-function cap that had been substituted in as a simpler
+fallback. **Current state: Tris ships completely unmodified from before
+this investigation** - no throttle, no fix, running at full real rate,
+with the pre-existing stall bug (present upstream too) still there,
+undocumented as a task for a future session if it's worth revisiting.
+
+**Tiny Pacman - added afterward, per direct user follow-up** ("pacman it
+plays too fast also"). Pacman wasn't in the original four-game "genuine
+rate" group because its own upstream mechanism is the redraw-throttled/
+logic-decoupled shape (44ms `FPS_Control`, gating only the redraw every
+other loop iteration - see the frame-pacing survey above) rather than a
+single combined-rate timer - this port's existing CPU-load fix already
+decoupled its sprite compositing from the render loop but still ran the
+whole tick once per real 60fps frame, faster than upstream's own blended
+~45fps logic rate. Rather than reproduce that exact non-uniform "2 ticks
+bunched together every 44ms" shape, the user asked for the simple fix
+used elsewhere: `#define PAC_FPS 60` changed to `30`
+(`PAC_TICK_DIVISOR = 60/PAC_FPS = 2`), plus a `pacTickSkipCounter` gate at
+the very top of `gameTinyPacman_update()` covering the *whole* function
+(including its own wait-states and `pacTinyFlip()` call) - the same
+whole-function tick-skip shape as NumberPlace/HollowSeeker/t2048/Doc, not
+the movement-only/redraw-decoupled shape used for Trick/Invaders/Pinball/
+Bert. This also preserves upstream's own "no redraw on the death-
+transition frame" quirk exactly, since the skipped-tick path and the
+death-early-return path both just leave the previous frame on screen.
+Verified via Puppeteer: Pac-Man's own single-tap movement registered
+correctly, and all three ghosts visibly dispersed to different maze
+positions after a real-time wait, confirming AI/movement keeps running
+(not frozen) at the new half rate. Tiny Bomber shares the *identical*
+upstream `FPS_Control`/`Frame%2==0` mechanism (same author, same pattern)
+and almost certainly has the same "plays too fast" issue, but was not
+raised by the user and not touched this round - worth applying the same
+fix proactively if it comes up.
+
+## Tiny Invaders: two collision bugs found via direct user play-testing
+
+After the Pacman/Tris throttle work, the user reported Invaders' own
+collision detection "seems off sometimes - I seem to shoot right through
+an invader without it dying, sometimes I shoot visually nothing and an
+invader seems to die on the right of my bullet." Two distinct bugs,
+found by tracing the actual collision code rather than guessing:
+
+**Bug 1 (this session's own regression, from the Invaders movement-only
+throttle above)**: `tinvTinyFlip()` isn't a pure render function -
+`tinvMyShoot()` (the shot's own position advancement *and* its collision
+check, via `tinvMonsterAttackCheck()`/`tinvUFOAttackCheck()`) is embedded
+directly in its per-pixel draw loop, a deliberate space-saving reuse of
+the same per-column pass upstream already did. The throttle's "call
+`tinvTinyFlip()` alone on skipped real frames to keep redraw at 60fps"
+pattern - correct and safe for Trick/Pinball/Bert, whose render functions
+have no embedded logic - meant the shot kept advancing/colliding at full
+rate here while monster movement (inside `tinvUpdatePlaying()`, gated by
+the throttle) ran at half rate, desyncing the two. **Fixed** by removing
+the skip-frame render call entirely for Invaders specifically - skipped
+frames now do nothing (previous frame persists, the same trick the whole-
+tick-throttled games already use), so the shot+monsters+render only ever
+advance as one atomic unit, never independently.
+
+**Bug 2 (genuine, longstanding, confirmed present in the actual upstream
+`Tiny-invaders.ino` - not a porting mistake, not caused by this session's
+throttle work at all)**: `tinvMonsterAttackCheck()`'s own grid-cell math
+(`round((myShootX - xMouin)/14.0)`, upstream lines 631-632) is genuinely
+inconsistent with `tinvOuDansLaGrilleMonster()`'s render-side grid lookup
+(plain integer division `(x - MonsterGroupeXpos)/14`, upstream line 658)
+- the function that decides what to *draw* at each pixel. Near a cell
+boundary these disagree: a shot in the right half of a monster's visually
+rendered 14px-wide sprite gets attributed to the *next* monster over by
+the collision check, matching both reported symptoms exactly (a "miss"
+on the real target, or a kill registering on the neighbor). Confirmed via
+the actual `.ino` source, not inferred - both formulas are there,
+genuinely different, in the original 2019 game itself. Asked the user
+whether to preserve this faithfully or fix it (a real design flaw, not a
+deliberate original choice, but still a deviation from strict upstream
+fidelity) - chose to fix it. **Fixed** by deleting
+`tinvMonsterAttackCheck()`'s own hand-rolled `xMouin`/`yMouin`/`round()`
+math entirely and reusing `tinvOuDansLaGrilleMonster()` directly (the
+exact same function already used for rendering) to get the grid cell -
+collision can now never disagree with what's drawn, by construction
+rather than by keeping two formulas in sync by hand. Required moving
+`tinvOuDansLaGrilleMonster()`'s own definition earlier in the file (single
+translation unit, no forward declarations - it needed to be defined
+before `tinvMonsterAttackCheck()`, which didn't previously call it).
+Verified via an extended soak test (repeated move+shoot over 15 cycles):
+score climbed from 0 to 170 and the 24-monster formation visibly dropped
+to ~7 remaining, confirming kills register reliably post-fix.
+
+## Beyond the original scope: a follow-up search for uncatalogued games
+
+Once every game from the project's original scope (tinyjoypad.com +
+gametiny) had shipped, a direct request to look for more TinyJoypad-
+compatible games turned up a genuinely new source: GitHub/GitLab/
+Codeberg/web searches found nothing on GitLab or Codeberg at all (this
+whole ecosystem lives on GitHub), but surfaced
+`Yevgeniy-Olexandrenko/tiny-handheld` (a hardware clone repo bundling a
+large pre-built game library) and, tracing its own bundled games back to
+their real authors, the actual canonical repos `webboggles/AttinyArcade`
+(Ilya Titov's own) and `andyhighnumber/Attiny-Arduino-Games` (Andy
+Jackson's own) - both cloned into `more games/` (`AttinyArcade/`,
+`tiny-handheld/`) the same `--depth 1` way as every other GitHub source
+here. These are the TRUE original sources for this project's existing
+Wren/Frogger/Bat Bonanza/Stacker/UFO ports, which had only ever been
+sourced via `cheungbx/gametiny`'s own mirror of them.
+
+Found genuinely new, not-yet-catalogued games: **Oroboros** and **Run
+Dude Run** (both Ilya Titov, same author as the already-shipped UFO, but
+different games), **Four in a Row** (unattributed in its own source), and
+**Dino Game** (an original creation of the tiny-handheld repo itself, not
+a port - uses a different SSD1306 library than every other game here,
+so would need its own driver work rather than being a drop-in). Also
+found several genre-duplicates of already-shipped games (an ATtiny
+falling-block puzzle game, an AttinyArcade Pacman, HIDIOT 2048, Breakout) - left unported,
+matching this project's own established "skip duplicate genres, not
+just duplicate files" precedent (e.g. SpaceAttackAttiny vs. Tiny
+Invaders) - and two MAKERbuino-platform ports (different hardware, out
+of scope).
+
+- `src/games/gameOroboros.c` - Oroboros ("UFO Escape", Ilya Titov,
+  webboggles.com/AttinyArcade, 2015; non-commercial with attribution -
+  same license family and author as this project's own UFO). A classic
+  Snake clone on a 32x16 logical grid, wrapping at the playfield edges,
+  growing on bait, dying on self-collision. Not tinyJoypadShim/
+  obonoCoreShim lineage by name, and - unlike this project's other
+  AttinyArcade-lineage ports (Wren/Frogger/Bat Bonanza/Stacker/UFO, all
+  already remapped to TinyJoypad's control scheme by Billy Cheung before
+  this project ever saw them) - this is the genuinely untouched original,
+  reading two discrete hardware-interrupt buttons rather than TinyJoypad's
+  analog ladder. Needed no new shim regardless: the game only ever reads
+  two logical inputs (turn left / turn right, relative to current
+  heading), so `isLeftPressed()`/`isRightPressed()` cover its entire
+  input surface. Upstream's `screenBuffer[16]` (a 32-bit-per-row occupancy
+  bitmask, read back via `>> (31-col) & 1` bit tests) was ported as a
+  plain flat occupancy array instead (`orbGrid[16*32]`, one int per cell)
+  - avoids ever needing a shift up to the sign bit (bit 31) on this
+  dialect's signed ints, never tested anywhere else in this project and
+  easily sidestepped with a plain array. Upstream's own two buttons set a
+  "pending turn" flag via real hardware interrupts, consumed once per
+  tick - a naive `isLeftPressed()` level read *at tick time* would behave
+  differently (spinning in circles if held across several ticks, since a
+  snake tick is much faster than a human can release a button) - fixed by
+  edge-detecting both buttons every real engine frame (independent of the
+  game's own slower tick rate) into a pending-turn flag consumed by the
+  next tick, reproducing upstream's real "one press, one turn" behavior
+  far more faithfully than a per-tick level read would. `nextDir` and
+  `selfCollision` are set upstream but never actually read anywhere
+  afterward - confirmed dead by inspection, dropped rather than ported.
+  The render loop upstream only ever streams 124 of 128 real columns,
+  relying on real SSD1306 VRAM to keep showing the always-black last 4
+  columns - the same VRAM-persistence assumption already found and fixed
+  in several other ports here, applied proactively from the start this
+  time. `system_sleep()`'s real AVR power-down has no Vircon32 equivalent
+  (no battery to conserve) - ported as its *observable* gameplay effects
+  instead: the 40-second idle-turn timeout still auto-advances the
+  heading once, and the post-game-over sleep becomes an explicit
+  wait-for-Fire gate, matching this project's own standing convention.
+  Upstream's game-over sound (a 1000-call synchronous `beep()` sweep)
+  was downsampled to a short frame-stepped descending sweep, matching the
+  established fix for this exact bug shape (Vircon32's audio channel has
+  no queue, so 1000 near-instant calls would only ever be audible as the
+  last one).
+  **A real bug found via direct, immediate user report right after
+  shipping** ("there does not seem to be food spawned for the snake"):
+  the ported tick function rebuilt the occupancy grid from the snake's
+  own segments only, missing upstream's own separate
+  `screenBuffer[baitY] |= (bit at baitX)` step that marks the bait's cell
+  in the SAME occupancy grid the snake segments use - since the bait's
+  own render condition is itself gated behind that grid bit already being
+  set (matching upstream's identical structure, where a cell draws
+  *nothing at all* unless its occupancy bit is set, checking the special
+  bait pattern only as a sub-case of an already-occupied cell), the bait
+  was computing valid X/Y coordinates every tick but never actually
+  becoming visible, since only snake segments ever set the grid. Fixed by
+  adding the missing grid-marking step for the bait's own cell,
+  positioned to match upstream's exact ordering (after the eat-check,
+  which can reset `baitDropped` back to 0 on the same tick the bait is
+  eaten - marking it unconditionally would have shown a phantom bait for
+  one frame immediately after eating). Caught and fixed within minutes of
+  the user's report by re-reading the render/tick functions side by side
+  against upstream, rather than needing further back-and-forth. 8-bit/
+  32-bit audit came back clean (no shift operators used anywhere in the
+  final port at all, no truncation-reliant sentinels, no negative-operand
+  modulo risk) and CPU stayed at a healthy ~50-56% throughout testing -
+  no optimization pass needed, the simplest render model of any port in
+  this project (plain grid lookups, no font-dispatch chains or bit-scan
+  loops).
+- `src/games/gameRunDudeRun.c` - Run Dude Run (Ilya Titov,
+  webboggles.com/AttinyArcade, 2017; non-commercial with attribution -
+  same license family and author as this project's own UFO/Oroboros).
+  Dodge falling bombs by moving left/right along the bottom row; bomb
+  spawn rate and live bomb count both scale up with score. Not
+  tinyJoypadShim/obonoCoreShim lineage by name (genuine #AttinyArcade
+  hardware, two discrete interrupt-pin buttons), needing no new shim -
+  `isLeftPressed()`/`isRightPressed()` cover the whole input surface.
+  Unlike Oroboros (this game's own sibling port, which needed edge-
+  detection to replicate a "one press, one turn" gesture), upstream's
+  own button handling here is a genuine level read
+  (`if (digitalRead(0)==1||btn1==1) ...`), matching a "run" game's real
+  intent - held directly at tick time with no edge-detection needed.
+  Upstream's bomb rendering is the most intricate part: bombs fall at an
+  arbitrary (non-page-aligned) pixel Y, so upstream slices its 7x16
+  sprite across up to 3 real hardware pages using `~byte >> offset ^
+  0xFF << offset2`-style expressions relying on AVR's implicit `uint8_t`
+  narrowing - the exact bug class this project has hit and fixed
+  repeatedly elsewhere. Re-derived instead with `rddBombColByte()` - a
+  single sign-branched shift of the sprite's 16-bit column value (top+
+  bottom source byte combined), independently correct by construction.
+  Upstream's ~30-second all-input idle timeout (real AVR sleep) was
+  dropped, matching this project's "only replicate a sleep call's
+  observable gameplay effect" convention - unlike Oroboros's own idle-
+  turn timeout, it has none. Upstream's game-over sound (a 1000-call
+  synchronous `beep()` sweep) was downsampled to a short frame-stepped
+  descending sweep, same established fix as every other oversized
+  upstream sound sweep in this project. `bottle1` is declared upstream
+  but only ever referenced from a commented-out call site - confirmed
+  dead by inspection, dropped.
+  **A self-found bug via this project's own now-standing proactive 8-
+  bit/32-bit audit, caught before ever shown to the user**: the INTRO
+  splash screen's byte read used a *logical* NOT (`!rddSplash[...]`)
+  instead of a *bitwise* one - would have collapsed any nonzero byte to
+  0 and any zero byte to 1 instead of inverting each bit, rendering the
+  splash essentially wrong. Fixed to `(~rddSplash[...]) & 0xFF`, the
+  same explicit-mask fix shape as this project's very first documented
+  bug (byte truncation/an unmasked bitwise NOT sets all 32 bits, not
+  just 8, on this dialect's full-width ints).
+  **A real, user-reported CPU spike ("once score hits 1000 CPU usage is
+  100%")**, needing two rounds to actually fix, both measured with the
+  perf overlay rather than assumed - see OPTIMIZATIONS.md's own entry
+  for the short version; the root cause was `rddUpdateBombs()`'s own
+  `else if (rddScore > 1000) rddTotalBombs++` branch having no upper
+  bound beyond the array capacity, so live bomb count keeps climbing
+  toward `RDD_MAX_BOMBS` (16) the longer a run survives past that
+  score. Round 1 (composite bombs once per page-row into a shared
+  buffer instead of rescanning all 16 at every pixel) measurably existed
+  as a real fix in isolation, but wasn't sufficient alone - verified via
+  a temporary debug hook (force `rddScore=1500`/`rddTotalBombs=16` at
+  init, and, to get a readable multi-second observation window before
+  an inevitable collision, also temporarily disabled the collision check
+  with `if (0 && ...)`) that CPU was *still* pegged near 100% with 16
+  bombs live even after round 1. Investigating further with the same
+  harness found round 2's real cause: `rddBombColByte()`'s original
+  form (`rddBombByteAt()`) resolved each output byte with an 8-iteration
+  bit-scan loop, each iteration calling a second function
+  (`rddBombPixelSet()`) - at 16 bombs x up to 7 columns x ~2 matching
+  pages x 8 bits, up to ~1,800+ real nested function calls/frame just to
+  resolve bomb pixels, consistent with this project's own repeated
+  finding that per-call overhead, not raw instruction count, dominates
+  cost on this platform. Rewritten as the single-shift `rddBombColByte()`
+  described above - zero inner loop, zero nested call. Confirmed via the
+  perf overlay: CPU with all 16 bombs live dropped from pegged/near-100%
+  to a steady ~52-63%, with a single-bomb baseline (47%) confirming bomb
+  count really was the scaling driver throughout. Rendering verified
+  pixel-correct via screenshot at every step (overlapping-bomb
+  compositing, player movement, score digits), and both temporary debug
+  hooks (forced score/bomb-count, disabled collision) were fully removed
+  and the real build re-verified clean afterward. Menu thumbnail added
+  the same way as every other port - the existing 4x8 grid's cell 30
+  (row 7, col 2) was still free (Oroboros had used cell 29 without
+  needing to grow the canvas), so no grid growth was needed here either;
+  `THUMBNAIL_COUNT` bumped 30->31, verified via screenshot that both the
+  new thumbnail and its Oroboros neighbor (cell 29) render correctly.
+- `src/games/gameFourInRow.c` - Four in a Row (Connect 4). From
+  `more games/tiny-handheld/software/games/attiny-arcade/four-in-row/` -
+  the third beyond-scope addition, and the first one with **no author
+  name anywhere in its own source** (a brief "connect 4 engine with
+  custom functions, ported to ATTiny85 hardware" note plus a reference to
+  another, unrelated pocket-game product is the entire header comment) -
+  not present in `webboggles/AttinyArcade`
+  either, so unlike Oroboros/Run Dude Run there's no Ilya Titov credit to
+  give here; menu credits it "UNKNOWN" and the README lists its license
+  as "None specified" rather than guessing. Genuine #AttinyArcade
+  hardware (A3/A0 analog axis + 2 discrete digital buttons), needing no
+  new shim - though only `IsLeft()`/`IsRight()` (A3-based) and
+  `IsAction()`/`IsCenter()` are ever actually called; `IsUp()`/`IsDown()`
+  (A0-based) are declared but dead, confirmed by grep before dropping
+  them. A connect-4-vs-simple-AI game: move a row selector up/down along
+  the 7 drop-columns (mapped to screen pages, matching this project's own
+  established A3-is-the-up/down-axis convention), drop with fire, first
+  to connect 4 wins. `boardId`-selector pattern (0=real board, 1=AI
+  scratch board) used instead of passing a 2D array as a function
+  parameter, matching Tiny Dungeon's own resolve-by-id precedent - no
+  existing port here passes a 2D array by pointer/value at all. One real
+  out-of-bounds read caught by inspection before ever compiling: the
+  anti-diagonal win check's own index formula uses `FIRO_BOARD_W-1-y-c`
+  (7, the board's *width*) instead of the board's *height* (6) - upstream's
+  own formula, preserved faithfully rather than "corrected" (tracing it by
+  hand confirmed it still only ever matches a genuine connected diagonal
+  whenever in-bounds, just anchored differently than a naive reader might
+  expect) - but harmless-on-real-AVR out-of-range indices are a real
+  out-of-bounds read here, so a bounds guard was added around just that
+  one check, the same "preserve behavior, guard the crash" treatment as
+  Tiny Arena's own `Lvl1` fix.
+  **The AI's own real minimax-ish lookahead** (`AISCANS=20` random
+  rollouts x `AIDEPTH=5` plies, per candidate column) runs *synchronously*
+  upstream, a genuinely perceptible "thinking" pause on real 8MHz AVR
+  hardware - spread across real engine frames from the start per this
+  project's own "always check for optimizations, unprompted" standing
+  instruction, needing two rounds before it was actually safe: round 1
+  (one column - all 20 scans - evaluated per frame) still measured
+  pegged 100% CPU for ~2 real frames per column even after eliminating
+  the `boardId`-dispatch function-call overhead for the hot path
+  (`firoScratchPlay()`/`firoScratchWin()`, operating directly on
+  `firoAiCboard` with plain array reads instead of `firoCellGet()`'s
+  dispatch - the same nested-function-call-overhead lesson just found in
+  Run Dude Run's own bomb rendering); round 2 narrowed the granularity
+  further to a single rollout *scan* per real frame (worst case 7
+  columns x 20 scans = 140 real frames, ~2.3s at 60fps - still a
+  perfectly reasonable board-game "thinking" pause) landing at a steady
+  ~53% CPU with no risk of frame truncation.
+  **The menu-text font needed four rounds of back-and-forth with the user
+  to get right, since this project's usual "keep the pixels faithful,
+  just fix the input mapping" precedent (established by Tiny Arkanoid)
+  turned out not to be enough here** - this game's own side-status text
+  ("PLAY"/"WINS"/"TIE", each pair of letters packed into one compressed
+  8x8 glyph, upstream's own `font[][8]` table) is genuinely sideways by
+  design (upstream's own comment: "Input for vertical screen
+  orientation"), and getting a ROTATED word to actually read correctly
+  needed the *exact* rotation transform, not just "any" rotation. Wrong
+  guesses along the way: a column-only mirror (fixed letter order within
+  each glyph, "YALP"->"PLAY", but left it upside-down); a naive full
+  180-degree rotation of the ALREADY-mirrored data (overcorrected,
+  un-fixing the order); an independently-derived "rotate the monitor 90
+  clockwise" transform reasoned from the user's own precise description
+  ("the bottom is actually on the right") - closer, but still not right,
+  since a single 90-degree rotation doesn't account for BOTH axes needing
+  correction simultaneously. The fix that actually worked came from a
+  direct, explicit user instruction - "starting from originals rotate
+  180 degrees and flip" - implemented as two literal sequential steps
+  (which algebraically collapse to a plain per-byte bit-reversal, since
+  the two column-order reversals from "rotate 180" and "flip" cancel out)
+  applied to the ORIGINAL upstream byte values, not to any of the
+  already-modified intermediate attempts. A final, separate fix swapped
+  which page (3 vs 4) renders which glyph-pair, since the corrected
+  glyph shapes still needed PL to visually read *before* AY. X/O/blank/
+  empty glyphs are symmetric under every one of these transforms
+  (verified directly against their own byte values each time), so only
+  the 6 letter-pair glyphs (PL/AY/WI/NS/TI/E) ever needed new data.
+  **Generalizable lesson**: for text/UI elements in a genuinely rotated
+  presentation (not just "sideways art" like a game board), don't assume
+  a single mirror or a generic 180-degree rotation is correct by
+  reasoning alone - the exact transform needs either rigorous, verified
+  derivation (a marker-pixel test through the actual tool being used to
+  preview it, as eventually done here to nail down ImageMagick's own
+  rotation convention with certainty) or a precise, literal instruction
+  from the person who can actually see the result, and even a
+  carefully-reasoned intermediate guess (the "rotate the monitor 90
+  clockwise" one) can still be wrong if it only accounts for one of the
+  axes that need correcting.
+  **A real, reachable false-win bug found via a user-provided exact board
+  state** (not a screenshot transcription - asked the user directly for
+  the board as plain text once repeated screenshot-reading attempts on
+  both sides kept landing on "so close, one cell short of 4" patterns,
+  removing all pixel-transcription ambiguity): `firoComputerThinkStep()`'s
+  AI evaluation compared each candidate column's accumulated score against
+  the running best (`firoAiSmax`, initialized to -99999999) with **no
+  check that the column had actually been playable** - an unplayable
+  (already-full) column's score simply stays at its untouched initial 0,
+  which still beats -99999999, so the AI could "choose" a full column.
+  Committing that choice via `firoBoardPlay()` then correctly fails (the
+  column really is full), falling into a defensive branch originally
+  written under the assumption it was "practically unreachable" - which
+  unconditionally declares a player win with no real board check at all.
+  **This exact flaw exists in upstream's own original code too**
+  (`if(mscore[m]>smax)`, same missing guard) - not something the port's
+  own per-frame AI restructuring introduced (confirmed by checking: the
+  very first synchronous, one-shot version of this project's own AI port
+  had the identical bug, inherited straight from upstream). Fixed by
+  adding a `firoAiColumnPlayable` flag and requiring it before a column's
+  score is allowed to win the comparison. Verified entirely through code-
+  level simulation per the user's explicit "no play testing" instruction
+  mid-investigation: a Python port of the exact scoring/comparison logic,
+  run against the user's own literal board text, reproduced the precise
+  failure (buggy logic "chooses" the reported-full column, which then
+  fails to play) and confirmed the fix picks a genuinely playable column
+  instead. A temporary on-screen debug readout (three small marker rows
+  encoding the winning check's type/x/y as raw glyph counts, added to
+  help pin down *which* code path was firing if the bug recurred) was
+  built, deployed for the user's own testing, and fully removed again
+  (confirmed via grep) once no further recurrence was reported. Menu
+  thumbnail added the same way as every other port - this filled the
+  4x8 grid's last remaining cell (31), so `THUMBNAIL_COUNT` bumped 31->32
+  and the grid is now **completely full** - and, as it turned out,
+  already sitting right at Vircon32's own 1024x1024 texture-dimension
+  cap (4 cols x 8 rows x 256x128 = exactly 1024x1024), so unlike every
+  earlier grid-growth in this project's history, there is no further "add
+  a row" option left at all - the next game needs a genuinely separate
+  second texture (see Dino Game's own writeup immediately below for how
+  that was actually built).
+- `src/games/gameDinoGame.c` - Dino Game. From
+  `more games/tiny-handheld/software/games/tiny-handheld/dino-game/` -
+  the fourth beyond-scope addition, and the **last known candidate**
+  from the original follow-up search (see this section's own intro) -
+  unlike every other beyond-scope game, this one is an ORIGINAL creation
+  of the `tiny-handheld` repo itself, not a port of an existing
+  TinyJoypad/AttinyArcade game (a Chrome-offline-dino-style endless
+  runner: jump cacti, dodge ground rocks, score climbs over time).
+  Credited in the menu as "TINY HANDHELD" (the originating project, not
+  an individual person - no author name is stated anywhere in this
+  game's own source either, but unlike Four in a Row's genuinely
+  anonymous origin, this one *is* explicitly documented elsewhere in the
+  same repo as that project's own original work, so crediting the
+  project itself is meaningfully informative rather than a guess).
+  **The first game in this whole project built on the real
+  `lexus2k/ssd1306` Arduino library** (a sprite + text API) instead of
+  either tinyJoypadShim/obonoCoreShim or a hand-rolled raw-byte driver -
+  the library itself isn't bundled in this repo (an external Arduino
+  library dependency), so its own internal implementation was never
+  read at all; instead this port inferred the exact intended pixel
+  output directly from the game's own draw calls (sprite positions/
+  widths, per-column byte data, text pixel coordinates), which turned
+  out to be entirely sufficient - a real, generalizable finding: you
+  don't need a library's own source if the *calling code* fully
+  determines what ends up on screen. Concretely: `drawGround()` already
+  streams one raw byte per column via `ssd1306_lcd.send_pixels1()` - the
+  exact model this whole project's `md_drawColumn()` already handles, no
+  reinterpretation needed at all. The sprite API's own `eraseTrace()`
+  (a real-hardware optimization - track a sprite's last position, erase
+  just that rectangle instead of clearing the whole screen) has no
+  equivalent needed here at all, matching this project's own standing
+  treatment of any upstream "only redraw what changed" trick - every
+  sprite is just composited fresh from its current position every frame.
+  Both sprites are one page (8px) tall but the dino's own Y is a genuine
+  arbitrary pixel value (jump physics), not page-aligned like the fixed-
+  height cactus - composited with a single sign-branched shift of the
+  sprite's own column byte, the same safe sub-page-slicing technique
+  already proven in Run Dude Run's own `rddBombColByte()`, just simpler
+  (one 8-bit source byte instead of two combined into 16 bits, since
+  these sprites are only 8px tall not 16). Text
+  (`ssd1306_printFixed`/`ssd1306xled_font5x7`) reuses this project's own
+  already-extracted standard 95-char ssd1306xled font (confirmed the
+  identical `font6x8.h` file is bundled in this same repo, already
+  ported once for both Oroboros's and Run Dude Run's own text) rather
+  than needing a fresh extraction - each game keeps its own self-
+  contained copy per this project's standing precedent. EEPROM high-
+  score persistence dropped (session-in-memory only), matching every
+  other port. Upstream's own real-time tick throttle (`millis()`-based,
+  ~71fps - genuinely *faster* than this engine's native 60fps, unlike
+  every other port's own throttle which has always asked for something
+  *slower*) was dropped entirely rather than built into an accumulator,
+  since there was nothing to gain from replicating a throttle asking for
+  more ticks than the engine can natively provide anyway - a deliberate,
+  documented ~15% pace simplification. One latent uninitialized-read
+  risk caught by inspection before ever compiling: a bucket-scan loop
+  that could complete without ever assigning its own output variable on
+  a specific edge-case input - fixed with an explicit default.
+  **A real, proactive CPU-load fix applied before ever shipping, per
+  standing instruction and verified via code inspection only (not
+  tested in the emulator)**: the cactus layer had the classic O(pixels x
+  objects) shape (128 columns x 6 cactuses = up to 768 checks/frame) -
+  composited into a shared per-frame page buffer instead (cutting it to
+  ~48 iterations), the same lesson applied throughout this project. The
+  dino sprite and ground/rock layers were already call-site-gated/cheap
+  from the start and needed no further change.
+  **A real bug found via direct user report right after shipping - not
+  a rendering bug at all, but the game silently never appearing in the
+  menu in the first place**: `menu.c`'s own `MAX_GAMES` cap was
+  hardcoded to 32, and Dino Game was the 33rd game registered (via
+  `addGame()`, called from `menuGameList.c`) - `addGame()`'s own
+  capacity guard (`if(gameCount>=MAX_GAMES) return;`) silently no-ops
+  once the cap is hit, with no warning or error of any kind, so the
+  game was simply never added to `games[]` at all. Fixed by bumping
+  `MAX_GAMES` to 48, giving headroom for several more future ports
+  without needing another bump each time - confirmed via screenshot
+  that "DINO GAME" now appears correctly in the alphabetized menu list.
+  **Menu thumbnail needed a genuinely new mechanism, not just "the next
+  free cell"**: the existing 4x8 grid (`assets/thumbnails.png`) was
+  already completely full AND already at Vircon32's hard 1024x1024
+  texture-dimension cap (see Four in a Row's own writeup above) - no
+  further growth of that single texture was possible at all. Solved
+  with a genuine second cartridge texture (`assets/thumbnails2.png`,
+  `obj/thumbnails2.vtex`, registered as texture id 2 in `rom.xml` and
+  both `Make.sh`/`Make.bat`) - a small 4x2 grid (1024x256, 8 cells of
+  headroom for several more games before a *third* texture is ever
+  needed) - `md_drawGameThumbnail()`/`md_getThumbnailCount()` in
+  `portVircon32.c` now dispatch between the two textures by gameIndex
+  (0..31 in the original atlas, 32+ in the new one), treating them as
+  one contiguous logical thumbnail space to every caller in `menu.c` -
+  no changes needed in `menu.c` itself at all. Verified via screenshot
+  that Dino Game's own thumbnail (texture 2, cell 0) and Four in a Row's
+  neighboring thumbnail (texture 1, cell 31, the original atlas's own
+  last cell) both render correctly with no cross-contamination between
+  the two textures.
+- `src/games/gameSnakeGame85.c` - SnakeGame85 (github.com/terezaza/
+  SnakeGame85, GPLv3). A fifth beyond-scope addition, found via a direct
+  link the user supplied rather than the earlier systematic search that
+  had otherwise closed out the beyond-scope backlog (see this file's own
+  Status intro). No individual author name appears anywhere in the
+  upstream source (`.ino`, `oled85.h`/`.cpp`, `README.md`) - credited in
+  the menu by the repo's own GitHub handle, "TEREZAZA", the only
+  identifying name available anywhere in the project. A classic
+  4-directional Nokia-style Snake on a 16x8 grid - deliberately not a
+  duplicate of this project's already-shipped Oroboros (also a Snake
+  clone, same beyond-scope batch): Oroboros's own upstream only supports
+  *relative* turn-left/turn-right input, while this game reads *absolute*
+  up/down/left/right, a genuinely different control feel confirmed before
+  committing to port it.
+
+  Not tinyJoypadShim/obonoCoreShim lineage - genuine bespoke hardware (a
+  real SSD1306 at I2C 0x3C, exact hardware match to every other game
+  here) with its own two-analog-pin, four-button ladder (`LEFT_RIGHT`/A3
+  and `UP_DOWN`/A2, each wired to two buttons at two different
+  thresholds) that has no fixed "left/right/up/down" meaning of its own -
+  mapped instead onto whatever produces natural d-pad movement, the same
+  kind of deliberate remap already used for Tiny Lander's thrust controls
+  and Tiny Arkanoid's paddle axis. `isFirePressed()` is never read at all
+  - this game's native input surface has only the four directions, which
+  also double as "any button" to start/restart, matching upstream's own
+  `checkButtonStateChange()` exactly.
+
+  `oled85.cpp`'s `drawBlock()`/`removeBlock()` operate on the same
+  byte-per-(column,page) primitive this whole project already uses
+  (`x *= NUM_PAGES` confirms x/y really are 16x8 grid units, one 8px-wide,
+  1-page-tall cell each) - no new shim needed. Rather than replicate
+  oled85's own incremental single-cell draw/erase calls, this port (like
+  most others here) rebuilds the whole 16x8 occupancy grid from scratch
+  every tick and redraws the complete screen every real engine frame,
+  avoiding any VRAM-persistence risk from the start rather than needing a
+  later fix. Upstream's own real, variable wall-clock tick pacing
+  (`moveSnake()`'s own `delay(150)`, plus `changeNextMove()`'s own
+  `delay(150)` on an actual direction change, plus the main loop's
+  trailing `delay(100)` - roughly 250-400ms/tick) was approximated with a
+  single flat whole-function tick divisor (~4 ticks/sec) rather than
+  modeled exactly, the same single-representative-rate simplification
+  already used for several other ports here. `changeNextMove()` is a
+  genuine synchronous level-read (`analogRead()`) called directly inside
+  the tick body upstream, not an interrupt-latched pending flag the way
+  Oroboros's own hardware works - so this port reads input once per
+  discrete engine tick rather than edge-detecting/queuing across real
+  frames, matching upstream's own polling structure directly (upstream's
+  own *second* `changeNextMove()` call per loop iteration only exists to
+  give real analog hardware a second chance to catch a change before its
+  own `delay(100)` - meaningless for an instantaneous digital gamepad
+  read, so only one call per tick is made here). Upstream's oversized
+  synchronous `tinyTune()` calls were converted to short frame-stepped
+  note sequencers, with frequencies/durations derived directly from
+  `tinyTune(down,up,times)`'s own real PWM period rather than guessed.
+
+  **Bitmap data extraction initially went wrong in a way worth
+  remembering**: the two raw SSD1306 bitmaps (`LOAD_SCREEN[]`/`SCORE[]`,
+  1024 bytes each) were correctly extracted via a small Python script
+  into scratchpad text files - but the *first* draft of this port's own
+  source file was written by manually transcribing plausible-looking
+  values into the `.c` file directly, without ever reading the script's
+  own output back in first. This produced a `snkLoadScreenData` array
+  with 1067 values instead of 1024 (caught immediately at compile time -
+  "too many values to assign to int[1024]" - not silently accepted), and
+  would have shipped with corrupted title-screen art had the count
+  happened to match. Fixed by actually reading the generated scratch
+  files and replacing the array with their real, byte-diffed-verified
+  content (`snkScoreBgData`, it turned out, actually *had* been copied
+  correctly the first time - only the load-screen array was wrong) - the
+  same "byte-diff transcribed tables, don't trust an eyeballed copy"
+  lesson this project has needed repeatedly, just via a new failure mode
+  (skipping the verification read-back step entirely, not just making a
+  transcription slip while looking at real data).
+
+  **A real display-orientation bug, found immediately from the first
+  screenshot rather than assumed correct**: the title screen rendered
+  with "SNAKE" upside-down and mirrored - a clean 180-degree rotation of
+  the whole image. Root-caused by re-reading `oled85.h`'s own
+  `init_commands_list`: it sends `SEGMENT_REMAP 0xA1` and
+  `COM_SCAN_DECREASING`, real SSD1306 hardware commands that reverse both
+  the column-address-to-physical-column mapping and the full 64-row scan
+  direction - meaning a real user's display shows every source byte's
+  (col, page) physically placed at (127-col, 7-page), *and* (since
+  reversing the scan direction reverses all 64 rows individually, not
+  just which 8-row page-block lands where) every byte's own 8 bits
+  individually reversed too. Fixed with a single wrapper in
+  `snkRenderImage()`: `snkComputeByte(127-x, 7-page)` (relative to the
+  physical pixel being drawn), then a bit-reversal of the result -
+  confirmed by the corrected screenshot showing "SNAKE" right-side up.
+  Also discovered from the same constructor read:
+  `OLED85::OLED85()` calls `sendCommand(INVERT_DISPLAY)` once,
+  permanently, right after the initial `fillScreen(0)` - this game runs
+  its entire real display hardware-inverted from boot onward, reproduced
+  with a `snkInvertFrame` flag applied uniformly to every rendered byte
+  (default on; only `blinkScreen()`'s own `NORMAL_DISPLAY` half-steps
+  briefly clear it), which is also why the grid-dot pattern reads as a
+  mostly-white cell with a single black dot rather than the reverse.
+
+  **A real CPU-cost regression from that same fix, reported directly by
+  the user right after** ("cpu usuage is high now that the game is
+  correctly flipped"): the bit-reversal was first implemented as an
+  8-iteration shift/or loop run for *every one* of the 1024 pixels/frame
+  (8192 total loop iterations/frame) - measurably enough to push a real
+  frame over Vircon32's 250,000-cycle/frame budget, visible as a partial
+  black region cut into the screen (this project's own well-documented
+  "frame truncated mid-instruction-stream" failure signature). Fixed by
+  precomputing a 256-entry bit-reversal lookup table instead (every
+  byte's own reversal is a pure function of its 8-bit value) - the same
+  "bake the 256 possible byte values into a table" approach the column
+  atlas itself already uses - collapsing the per-pixel cost to a single
+  array read. Verified via the WebGL perf overlay: CPU dropped to a
+  steady ~5-6%.
+
+  **A second real bug from the same orientation fix, also reported
+  directly by the user right after** ("controls are inverted now also so
+  need to adapt controls"): the display-orientation fix only corrected
+  *rendering* - the movement/collision logic still operates in the
+  original, now-visually-mirrored coordinate space, so a raw +X delta
+  (the same delta upstream's own `reset()` comment calls "left") was
+  moving the snake toward smaller *physical* columns, i.e. still visually
+  left, but pressing the gamepad's own Right button was mapped straight
+  to raw +X - backwards on screen. Fixed by inverting both axes in
+  `snkChangeNextMove()`'s own button-to-delta mapping (Left -> raw +X,
+  Right -> raw -X, Up -> raw +Y, Down -> raw -Y) to compensate for the
+  same point-reflection the renderer now applies - the anti-reversal
+  guards needed no changes, since they only compare raw deltas against
+  each other, not against any notion of screen direction. The *default*
+  starting direction (raw +X, unchanged) was deliberately left alone,
+  since it already correctly reproduces upstream's own documented visual
+  intent ("left") once run through the same remap.
+
+  **A third real bug, this time asked about rather than reported as
+  broken** ("does upstream actually temporarily draw a food item in a
+  corner of the screen?"): confirmed by directly re-reading `placeDot()`/
+  `moveSnake()`/the main loop that upstream does *not* - `dot[]` is only
+  ever assigned once a free cell is confirmed, drawn once. The corner
+  flash was a genuine bug specific to this port's own architecture:
+  growing the snake by simply incrementing `snkSnakeLen` left the new
+  tail slot's `snkSnakeX`/`snkSnakeY` at whatever zero-initialized value
+  was already sitting in the array - a real, in-bounds grid cell (0,0),
+  the board's own corner - and unlike upstream (whose own per-tick render
+  happens *inside* `moveSnake()`, before `snakeLen++` ever runs, so the
+  next tick's own shift overwrites the stale slot before it's ever drawn)
+  this port rebuilds the occupancy grid for rendering *after* growing
+  length, in the *same* tick, exposing the stale slot for exactly one
+  frame every time the snake ate. Fixed by explicitly seeding the new
+  tail segment at the old tail's own position at the moment of growth,
+  rather than leaving it unset. Verified with a temporary debug hook
+  (forcing a deterministic dot position right after spawn, so an eat
+  event could be reproduced on an exact known tick rather than waiting on
+  real randomness) - screenshots across the eating tick confirmed no
+  corner artifact, correct growth (3 segments to 4), and a sensible new
+  dot position after eating; the hook was fully removed once confirmed.
+
+  Menu thumbnail: added to `assets/thumbnails2.png`'s cell 1 (the second
+  cell of its 4x2 grid, right after Dino Game's own cell 0) - no further
+  atlas growth needed. Verified via screenshot that both thumbnails
+  render correctly with no cross-contamination.
+- `src/games/gameJumpSlime.c` - Jump Slime (near-final revision "jump6" of
+  `more games/sample/attiny85AIjump6/attiny85AIjump6.ino`, one of 3 AI-
+  assisted original ATtiny85 games in `more games/sample/` - see that
+  folder's own catalog entry above for how all 3 were identified and
+  triaged, and this file's own Status intro for the discovery channel).
+  Author: 近藤さんちの研究室 ("Kondo-san's Laboratory"), note.com handle
+  "kondolab" - credited in the menu as "KONDOLAB" (romanized handle, no
+  individual real name given anywhere in English, same treatment as
+  SnakeGame85's own "TEREZAZA" credit). No license is stated for this
+  game's own code anywhere on its article page - listed as "None
+  specified", a statement about the license only, not the (known,
+  credited) author.
+
+  A jump-action platformer: run/jump across 5 stages of floating blocks,
+  dodge back-and-forth patrolling enemies, reach each stage's goal coin.
+  Picked over the other 2 sample games (TinY Fi, a fighting game; TinyRoG,
+  a roguelike) as the simplest/lowest-risk to port first - all 3 share the
+  same driver lineage (see below) and have exactly one `while(1)` each (the
+  standard outer state-dispatch loop, no goto-chains), but Jump Slime alone
+  has no fighting-game hit-frame/combo state and no maze-generation
+  algorithm to reason through.
+
+  Two local folders exist for this game (`attiny85AIjump5`/
+  `attiny85AIjump6`, both placed directly into the repo by the user, not
+  git-cloned) - confirmed NOT two different games via a line-ending-
+  normalized diff (`jump6` is saved CRLF, `jump5` LF, which made a naive
+  `diff` initially look like every single line had changed): `jump6` is a
+  strict superset of `jump5`, just adding a 5th stage on top of otherwise
+  byte-identical code, and its own file timestamp is 11 days later - a
+  later revision, ported here instead of the earlier one.
+
+  Not tinyJoypadShim/obonoCoreShim lineage by name - this game's own
+  `util.h` looked bespoke at first glance, but its actual button
+  thresholds (`TINYJOYPAD_LEFT`/`RIGHT`/`UP`/`DOWN`, A0/A3 analog reads)
+  and its sprite-blitting helpers (`blitzSprite`/`SPEED_BLITZ`/
+  `RecupeLineY`/`RecupeDecalageY`/`SplitSpriteDecalageY`) turned out to be
+  functionally identical to Daniel C's own `ELECTROLIB.h` already used
+  throughout this project (confirmed by direct diff against this
+  project's own already-staged copy) - almost certainly the AI was fed
+  that driver as a reference and reproduced it with added Japanese
+  comments rather than inventing a genuinely new one (the other 2 sample
+  games, TinY Fi/TinyRoG, `#include "ELECTROLIB.h"` directly, removing
+  any doubt about the lineage for those two). No new shim needed:
+  `isLeftPressed()`/`isRightPressed()`/`isFirePressed()`/`Sound()` from
+  the existing `tinyJoypadShim` cover the whole input/audio surface, and
+  `jslmBlitzSprite()` is a direct, already-proven translation of the same
+  algorithm this project's own `gameTinyBert.c` already carries under its
+  own prefix - reused rather than re-derived, to avoid a transcription
+  risk on a subtle bit-splitting algorithm that's already been gotten
+  right once.
+
+  Every sprite/font/stage-data table was byte-diff-verified against the
+  original source via a small Python script before ever building, not
+  hand-copied blind - matching this project's own "byte-diff transcribed
+  tables" discipline, reinforced by the SnakeGame85 port earlier the same
+  session where skipping exactly this verification step shipped a
+  corrupted bitmap array.
+
+  Upstream's own debounce mechanism (`lastBtnAState`/`DEBOUNCE`, a real
+  blocking `_delay_ms(30)` on every button check) is dropped entirely in
+  favor of a single shared `jslmPrevFire`/edge-detect flag updated once
+  per real frame (not reset per state) - enough on its own to keep a
+  state transition's own confirming press from bleeding into the very
+  next state's own edge check (e.g. title -> gameplay not instantly
+  triggering a jump on the same physical press), with no need for a
+  dedicated per-transition gate the way some other games in this project
+  have needed.
+
+  Two genuine 3-note `Sound()` bursts (game-over, fired identically from
+  both the fall-off-bottom and enemy-collision paths; stage-clear) were
+  found via a direct check of every `Sound()` call site before ever
+  compiling and converted to small frame-stepped sequencers up front,
+  matching this project's own established fix for this exact bug class
+  (Vircon32's audio channel has no queue - a synchronous burst of
+  `Sound()` calls is only ever audible as the very last note). At the
+  user's direct request ("check other games as well related to the
+  sound"), the other 2 sample games were checked too: both TinY Fi and
+  TinyRoG only ever call `Sound()` once per event and never invoke their
+  own `ELECTROLIB.h`'s shared (and, in both games, entirely unused)
+  `PLAY_MUSIC()` helper, so neither has this bug waiting when it's
+  eventually ported.
+
+  **A real CPU-budget overrun found immediately via the WebGL perf
+  overlay, before ever calling the port "done"**: gameplay was pegged at
+  a saturated 100%, with a visibly truncated frame (only the top couple
+  of rows drawn before cutting to black) - this project's own well-
+  documented "frame truncated mid-instruction-stream" failure signature.
+  Root cause was the now-familiar O(pixels x objects) shape: the current
+  stage's 12-13 blocks were rescanned from inside the per-pixel render
+  call (up to 13*1024 wasted loop iterations/frame to find the 1-2 blocks
+  that actually matched a given page), and the player/coin/enemy sprites
+  (each only an 8px-wide footprint) were each handed to `jslmBlitzSprite()`
+  for all 128 columns of every page regardless - the same "self-gated
+  call still costs a full call every time it's invoked" lesson already
+  found repeatedly elsewhere in this project (Arkanoid/Bert/Tris/Trick/
+  Morpion). Fixed with two per-page composite buffers
+  (`jslmBlockRowBuffer`/`jslmSpriteRowBuffer`, both rebuilt once per page -
+  8x/frame - instead of once per pixel - 1024x/frame): blocks are always
+  page-aligned in every one of this game's 5 stages (confirmed by
+  inspection), so their own buffer reads each block sprite's raw column
+  bytes directly rather than going through `jslmBlitzSprite()`'s more
+  general sub-page-split logic; the sprite buffer still calls
+  `jslmBlitzSprite()` (needed for the player, which *can* be sub-page-
+  positioned) but only across each sprite's own real 8-column span on the
+  (up to 2) pages its Y position could actually touch, not all 128
+  columns. Verified via the perf overlay: CPU dropped from a pegged,
+  truncating 100% to a steady 60% during real gameplay, with the
+  previously-truncated frame now rendering completely.
+
+  **A real credit mix-up caught by direct user question** ("regarding
+  author of jumpslime can't you look that up on the source.txt sites") -
+  an early draft of the `addGame()` call passed `"NONE SPECIFIED"` as the
+  *author* field, when that phrase was only ever meant to describe the
+  *license* (which genuinely has none stated) - the actual author
+  (kondolab, already identified during this game's own triage) had simply
+  been mis-slotted into the wrong parameter. Fixed by passing "KONDOLAB"
+  as the author instead, matching every other credited-by-handle game in
+  this project (SnakeGame85's own "TEREZAZA", etc) - a good reminder that
+  "no license stated" and "no author known" are two independent facts
+  that shouldn't collapse into the same placeholder string.
+
+  A 30fps whole-function tick-skip was added afterward at direct user
+  request ("limit this games speed to 30 fps") - upstream itself has no
+  genuine real-time throttle at all (no `FPS_Control`, no
+  `CONTROL_FRAMERATE` call - the "no timing model whatsoever upstream"
+  category from this project's own frame-pacing survey, same category as
+  Tiny Trick/Invaders/Pinball/Bert/Tris), so this is a deliberate
+  slowdown rather than restoring an original rate. Gates the *whole*
+  `gameJumpSlime_update()` body (logic and redraw together), matching the
+  majority precedent in this project (NumberPlace/HollowSeeker/t2048/Doc/
+  Pacman/Pipe) rather than the movement-only/redraw-stays-60fps split
+  used elsewhere for games that already had 60fps-tuned wait timers
+  needing to stay real-time accurate - this game had no such existing
+  timers to preserve. Every existing frame-counted constant in the file
+  (`jslmBlinkTimer`'s own 36-frame blink cycle, the sound sequencers' own
+  wait-frame tables) was deliberately left unrescaled, matching this
+  project's own standing "one divisor, no dual bookkeeping" practice -
+  they simply now take twice as long in real time. Verified via
+  screenshot that movement/jump/rendering all still work correctly at the
+  throttled rate, with CPU unchanged at ~60%.
+
+  Menu thumbnail added to `assets/thumbnails2.png`'s cell 2 (third cell of
+  its 4x2 grid) - no atlas growth needed. Verified via screenshot that it
+  displays correctly alongside its neighbors.
+- `src/games/gameTinyRoG.c` - TinyRoG (`more games/sample/Cave11Item/
+  Cave11Item.ino`, second of the 3 AI-assisted original ATtiny85 games in
+  `more games/sample/` - see that folder's own catalog entry above for
+  identification/triage, and Jump Slime's own writeup for the shared-
+  driver-lineage finding common to all 3). Author: 近藤さんちの研究室
+  ("Kondo-san's Laboratory"), note.com handle "kondolab" - credited
+  "KONDOLAB" in the menu, same treatment as Jump Slime (a known author,
+  an unstated license - see Licensing below).
+
+  A roguelike RPG: explore a procedurally-generated maze each floor, grab
+  the key to reveal the stairs, fight or dodge wandering monsters,
+  occasionally find a healing item box, reach floor 30 to win. Picked
+  over TinY Fi (the fighting game, still unported) specifically because
+  TinY Fi's own render dispatch is a dense, easy-to-mistranscribe tangle
+  of per-animation-state, per-layer sprite calls with many small magic
+  pixel offsets, whereas this game's own complexity is concentrated in
+  self-contained algorithmic logic (maze generation, tile-based movement/
+  combat) rather than a sprawling render table - and its own `tinyDraw()`
+  already precomputes enemy screen positions once per frame
+  (`calcEnmDraw()`) rather than per pixel, a sign the original AI-
+  assisted code was already somewhat performance-conscious.
+
+  `#include "ELECTROLIB.h"` directly (same as every Daniel-C-lineage game
+  in this project), confirming the shared-driver-lineage finding from
+  Jump Slime's own port applies here too - no new shim needed. Every
+  ternary expression, `switch` statement, and `enum` was converted to
+  plain if/else-if chains and `#define` constants, matching this
+  project's own standing caution around those 3 constructs. Upstream's
+  own debounce mechanism (`lastBtnAState`/`DEBOUNCE`, a real blocking
+  `_delay_ms(30)`) was dropped for a single shared edge-detect flag,
+  matching every other port here. `random(n)`/`random(min,max)` calls are
+  routed through the shared `arand()` helper (a `trogRandRange(min,max)`
+  wrapper for the two-argument form) rather than raw `rand()%n`;
+  `randomSeed()` has no equivalent call (Vircon32's `rand()` isn't
+  seedable the same way), matching Wren Rollercoaster's own precedent - a
+  minor accepted deviation (maze layouts won't be bit-identical to a real
+  device's own specific seed).
+
+  `dig()`'s own local maze-carving stack (`stack_x`/`stack_y`) is a
+  variable-length array upstream, sized at runtime from a macro based on
+  the current stage's own maze dimensions - not something this project's
+  dialect has ever been confirmed to support, so ported as fixed-size
+  globals sized to the true worst case instead
+  (`((17+1)/2)*((11+1)/2)=54`, the maximum possible `TILES_W`/`TILES_H`).
+  Safe because `dig()`'s own algorithm only ever pushes a given odd-
+  coordinate cell onto the stack once (it's marked carved immediately
+  when pushed, so no future search path can ever find it as a wall and
+  push it again), so 54 is a true upper bound on stack depth at any
+  moment, matching upstream's own comment explaining the same reasoning
+  for its dynamically-sized version.
+
+  Every sprite/font/stage-data table was byte-diff-verified against the
+  original source via a small Python script before ever building -
+  caught one real transcription error this way (`trogMiniTitle`'s own
+  "Next" glyph data: `0x18`/`0x30` mistakenly hand-converted to decimal
+  as `18`/`30` instead of the correct `24`/`48`), fixed before the first
+  build attempt - the same "byte-diff transcribed tables" discipline
+  reinforced hard by SnakeGame85's own corrupted-bitmap bug earlier this
+  session.
+
+  **A real bug in this port's own death-screen wait logic, caught by
+  direct code inspection while answering a user question** ("what
+  happens if you die? does it stay on the die screen?"): upstream's own
+  `if(cnt>=WATE_GAMEOVER)cnt=WATE_GAMEOVER;` clamp is unconditional inside
+  `GAME_STAGE` - it locks `cnt` at 50 while on *any* GAME_STAGE screen
+  (title, floor-transition, death, ending alike), and it's the *fire-
+  press* branch, not the clamp itself, that actually restricts the real
+  effect to the death/ending screens (only reacting to `cnt==50` when
+  `nowHp==0` or the floor was cleared). An earlier draft of this port
+  added an extra, upstream-doesn't-have-it condition,
+  `trogNowStageNo >= TROG_WAIT_GAMEOVER &&`, before the clamp - since
+  `nowStageNo` is normally 1-30 (far below 50), that condition was almost
+  always false, so `trogCnt` would just keep cycling 0-99 forever instead
+  of locking at 50 on the DIE screen - meaning a fire press there would
+  only actually register on the rare frame where `trogCnt` happened to
+  land on exactly 50 (about 1 frame in 100), making the death screen feel
+  "stuck" almost all of the time even though it was nominally still
+  responsive. Fixed by removing the erroneous extra condition, matching
+  upstream's own unconditional clamp exactly. Verified end-to-end via a
+  temporary debug hook (forcing 1 HP and an immediate enemy attack
+  windup, since the attack-countdown itself ticks down in real time
+  regardless of player input, while enemy *pathing* is turn-gated on the
+  player's own successful moves - a real structural distinction in this
+  game worth remembering for any future work here) - confirmed the full
+  cycle (DIE screen -> lock expires -> fire press moves to Title -> fire
+  press again begins a fresh floor) all work correctly; the hook was
+  fully removed once confirmed.
+
+  **A real CPU-budget concern found via the perf overlay before ever
+  shipping** (a lesson from Jump Slime's own port applied proactively
+  here first): even with a player/enemy-attack-icon overlay already
+  composited once per page from the start (matching Jump Slime's own
+  fix, not retrofitted), gameplay still read a pegged 100%. Root cause
+  was the map-tile renderer (`makeTile()` upstream) being called once per
+  *pixel* (1024/frame) - not the O(pixels x objects) shape from Jump
+  Slime (this function only ever resolves the *one* tile under a given
+  pixel, not every tile on the map), but a related "recompute what
+  hasn't changed" waste: 8 *consecutive* screen columns always belong to
+  the same 8x8 tile, so the same "which sprite bytes apply here" lookup
+  was being redone up to 8 times in a row for an identical result. First
+  fix attempt added a small per-tile cache (`trogResolveTileBytes()`,
+  matching Tiny DDug's/Tiny Doc's own "cache what doesn't change every
+  pixel" lesson) - measured no real improvement (still a pegged 100%),
+  since the *call itself* (parameter passing, the cache-hit comparison)
+  still happened on all 1024 pixels regardless of whether the cache hit.
+  Fixed properly by restructuring the same way as Jump Slime's own blocks
+  fix: composite the whole page row by walking *tiles* (at most 17 per
+  row) instead of *pixels* (always 128) into a shared row buffer,
+  preserving the cached per-tile lookup *and* the exact same sub-page
+  shift-amount conditions the original per-pixel version used. Verified
+  via the perf overlay: CPU dropped from a pegged 100% to a steady 60%,
+  with rendering confirmed pixel-identical (same maze, same enemy/key/
+  stairs icons, same HUD) before and after.
+
+  A 30fps whole-function tick-skip was added afterward at direct user
+  request ("limit fps to 30"), matching Jump Slime's own precedent
+  exactly - upstream has no genuine real-time throttle at all (same "no
+  timing model whatsoever" category). Every existing frame-counted
+  constant in the file (`trogCnt`'s own 0-99 cycle and its
+  `TROG_WAIT_GAMEOVER`=50 clamp, the enemy attack-windup countdown
+  starting at 7, `TROG_WAIT_FLM`=3) was deliberately left unrescaled -
+  they simply now take twice as long in real time. Verified via
+  screenshot that movement/rendering still work correctly at the
+  throttled rate, CPU unchanged at ~60%.
+
+  Menu thumbnail added to `assets/thumbnails2.png`'s cell 3 (fourth cell
+  of its 4x2/8-cell grid - despite this session's own writeup at the time
+  claiming the atlas was "now completely full again", a later direct
+  pixel-level inspection of the PNG (done while porting TinY Fi, see that
+  game's own writeup below) confirmed cells 4-7 were still genuinely
+  blank - that earlier claim was simply wrong, not a description of a
+  since-changed state; corrected here rather than left standing).
+  Verified via screenshot that it displays correctly and Jump Slime's own
+  neighboring thumbnail (cell 2) is untouched.
+
+- `src/games/gameTinYFi.c` - TinY Fi (Kondolab / 近藤さんちの研究室,
+  contact via note.com - credited "KONDOLAB" in the menu, same treatment
+  as Jump Slime/TinyRoG's own credit; license "None specified", same
+  known-author-unstated-license situation as those two). Third and last
+  of the 3 `more games/sample/` AI-assisted games, ported after Jump
+  Slime and TinyRoG in a later session (picked last specifically because
+  its render dispatch - a dense, per-animation-state tangle of several
+  stacked sprite layers per character - looked like the highest-risk of
+  the three at triage time; see this file's own header comment for the
+  full reasoning). A belt-scroll-style fighting game: move/jump with the
+  d-pad, punch/uppercut/jump-kick with Fire, across 6 stages of
+  increasingly numerous enemies (the last enemy of stages 3 and 6 is a
+  tougher "boss" with double HP and its own head sprite). Same
+  `ELECTROLIB.h` driver lineage as every other Daniel-C-family game and
+  as Jump Slime/TinyRoG's own reproduction of it under a different
+  filename - no new shim needed, and no blocking waits/FPS-limiter to
+  convert at all (upstream's own `loop()` is already fully frame-based,
+  with real per-tick edge-detected button checks, not a busy-wait
+  anywhere in the game logic itself).
+
+  A proactive fix applied from the start, not found via a bug report:
+  `RecupeLineY`/`RecupeDecalageY` are fed genuinely negative Y positions
+  here (a jump's initial `gravity=JUMP_STRENGTH=-8` can carry a
+  character's Y above 0 before gravity brings it back down) - the exact
+  same logical-vs-arithmetic-right-shift bug class already found and
+  fixed in HollowSeeker's `hsDivByColumnW` and Tiny Pipe's own
+  `RecupeLineY`, fixed the identical way (branch on sign, only ever shift
+  a non-negative operand). Several genuine upstream quirks were traced
+  and preserved rather than "corrected" - a dead random-enemy-spawn-X
+  computation immediately overwritten by 3 fixed positions, an uppercut-
+  cooldown bonus that can never fire (`pncCd=14; if(pncCd%4==0)...` -
+  14%4 is never 0, in upstream too), a boss-designation check that reads
+  the wrong array index (`acter[i].x!=200` instead of `acter[ENM+i].x`,
+  an always-true no-op since the player's own X never reaches 200), a
+  genuine double-decrement of `acter[ME].cdw` within a single tick (once
+  near the top of `GAME_STAGE`, once again near the bottom - real,
+  already-tuned cooldown-timing behavior, not a transcription slip), and
+  a skipped out-of-bounds `enmCnt[nowStageNo]` read in `setup()` (reads
+  index 200 against a 6-entry array - traced every later use and
+  confirmed it's always overwritten before ever being read, so guarding
+  it would have been pure ceremony) - see this file's own header comment
+  for the full list and reasoning behind each.
+
+  **A real CPU-budget overrun, found via a direct user report during this
+  port's own first playtest** ("100% cpu is hit during gameplay"),
+  visible as characters rendering as small, incomplete blobs mid-fight -
+  this project's own well-documented "frame truncated mid-instruction-
+  stream, real CPU-budget exceeded" failure signature, not a logic bug.
+  Root cause was the by-now-familiar O(pixels x objects) shape, just one
+  level deeper than usual: the render loop already composited each of the
+  4 characters into a shared per-page buffer instead of scanning all 128
+  columns directly (this project's own standard fix, applied from this
+  port's very first draft) - but that per-character composite still
+  called the generic per-pixel `tfiBlitzSpriteDir()` once per *column*
+  per *layer* (up to ~20 columns x up to 5 stacked sprite layers x up to
+  4 characters x up to 6 pages), and each of those calls independently
+  recomputed the same per-row-constant values
+  (`wMax`/`picByte`/`recupeLineY`/`spriteYDecalage`) that don't actually
+  change across a single sprite layer's own row. Fixed by adding
+  `tfiBlitzSpriteRow()` - hoists that computation to run once per
+  (character, layer, page) instead of once per column, the same "cache/
+  hoist what doesn't change across an inner loop" lesson as TinyRoG's own
+  tile-row compositing and Tiny DDug's wall-mask cache, just applied one
+  level deeper than the per-character row-buffer compositing already in
+  place. Applied the identical lesson to the page-0 HUD layer too (the
+  "HP"/"EN" labels and every acter's own HP-bar segment were being
+  recomputed for all 128 columns instead of composited once per page) -
+  per a direct follow-up user request ("apply the pixel 1024
+  optimization if possible") - via a new `tfiComposeHudRow()`, matching
+  the same once-per-page compositing shape as the sprite fix.
+  **Measured, not just applied on theory**, per this project's own
+  standing practice: the WebGL perf overlay showed CPU dropping from a
+  saturated, frame-truncating 100% down to a steady 50-54% across an
+  extended soak test (continuous movement + repeated punching against
+  all 3 starting enemies, sampled every few real seconds), with
+  characters now rendering completely (heads, bodies, legs all present)
+  throughout - confirmed via screenshot at every sampled point, not just
+  a single before/after pair.
+
+  A 30fps whole-function tick-skip was added afterward at direct user
+  request ("limit fps to 30") - upstream has no genuine real-time
+  throttle at all (the "no timing model whatsoever upstream" category,
+  same as Jump Slime/TinyRoG). Every existing frame-counted constant in
+  the file (`tfiCnt`'s own 0-64 animation cycle, every `cdw`/`pncCd`
+  cooldown counter) was deliberately left unrescaled, matching this
+  project's own standing "one divisor, no dual bookkeeping" practice -
+  they simply now take twice as long in real time.
+
+  Verified via Puppeteer: the title screen ("TinyFi", composited from two
+  adjacent `miniStg` sprite frames), the floor-intro screen ("FL.01", via
+  the shared number-display helper), and active gameplay (movement,
+  punching connecting and reducing an enemy's HP bar, the HP/EN HUD bars
+  and enemy-remaining debug digit all rendering correctly) were all
+  confirmed via screenshot both before and after the CPU fix. The
+  DIE/FIN(clear) screens were not independently screenshot-forced this
+  session - both reuse the exact same `tfiSpeedBlitz`-against-`miniStg`
+  mechanism already proven correct by the title/floor-intro screens, just
+  with different frame indices from the same already-verified table, so
+  risk is low, but worth a direct check if anything looks off. Stage-
+  clear (defeating a full floor's worth of enemies) and a player-death
+  sequence were likewise not independently forced to completion this
+  session - an extended soak test reduced the starting 3-enemy group by
+  one confirmed kill (HP bar visibly emptying, the debug enemy-remaining
+  count changing) without incident, but didn't run long enough to reach
+  either terminal state.
+
+  Menu thumbnail added to `assets/thumbnails2.png`'s cell 4 (first cell
+  of the grid's second row) - confirmed via a direct pixel-level
+  inspection of the PNG (not by trusting this file's own prior, since-
+  corrected "atlas is now completely full" claim from TinyRoG's own
+  writeup above) that cells 4-7 were genuinely still blank before this
+  addition. No further atlas growth or third texture needed - 3 cells
+  (5,6,7) remain free for future games.
+
+- `src/games/gameBreakout.c` - Breakout (Ilya Titov, non-commercial-with-
+  attribution; ATtiny-Joypad port by Billy Cheung, 2018; combined with
+  Ilya Titov's own UFO into one cartridge by Andy Jackson, 2018 -
+  credited "ILYA TITOV" in the menu, same treatment as UFO/Oroboros/Run
+  Dude Run's own credit). A classic paddle-and-ball brick breaker: a
+  3-row x 16-column block grid, a bouncing ball, and a paddle moved
+  left/right. First of the 3 games found via the `more games/gametiny/`
+  re-verification (see that folder's own catalog entry and this file's
+  own Status intro above for the full story - the user directly pushed
+  back on the earlier "same genre as Tiny Arkanoid, skip it" reasoning
+  and asked for a real code-level check) - picked to port first among the
+  3 newly-found candidates (SpaceAttack, Falling Blocks, Breakout)
+  since it's the smallest genuinely-new slice of code (`UFO_Breakout_
+  Arduino.ino`'s own `playUFO()` half is a confirmed duplicate of the
+  already-shipped UFO, so only `playBreakout()` plus shared boilerplate
+  needed porting) with the simplest structure (no C++ classes, no `goto`
+  loops beyond one bounded collision-recheck).
+
+  From `more games/gametiny/UFO_Breakout_Arduino/` - a genuinely
+  **combined cartridge** (its own boot-time prompt lets the player choose
+  UFO or Breakout), the same shape as `UFO_Stacker_Attiny` (already split
+  into this project's own standalone UFO/Stacker entries) - split the
+  same way, as its own standalone menu entry rather than replicating the
+  in-cartridge sub-menu. Not `tinyJoypadShim`/`obonoCoreShim` lineage by
+  name, but needed no new shim - the same A0 left/right analog thresholds
+  as every other game in this family map straight onto
+  `isLeftPressed()`/`isRightPressed()`. This game's own `font6x8AJ.h` was
+  byte-diffed directly against the already-shipped Stacker copy (a
+  5-line, comment-only diff) rather than assumed identical from the
+  filename alone (the lesson from Frogger's own differently-remapped copy
+  of a same-named file) - confirmed genuinely byte-identical, so the same
+  360-value table/remap formula/credit strings are reused, each game
+  still keeping its own self-contained copy per this project's standing
+  practice.
+
+  **A genuine, load-bearing upstream timing quirk, found by tracing the
+  control flow rather than assumed**: upstream's own `lastFrame` (a
+  `millis()`-based "don't run the frame-action block more than once every
+  10ms" gate) is set exactly once, right before the outer
+  `while(stopAnimate==0){ delay(40); while(1==1){...} }` loop begins, and
+  is never reassigned anywhere inside either loop - since the inner
+  `while(1==1)` only ever exits via the same `stopAnimate=1; break;` that
+  also ends the outer loop, `delay(40)` only ever executes once, and
+  `if(lastFrame+10<millis())` becomes permanently true after the first
+  10ms and stays that way for the rest of the game. This isn't a bug
+  worth "fixing" back to a real 10ms gate (that would just reintroduce
+  behavior the original author never actually shipped or tested) - ported
+  as observed: the frame-action block (paddle-hit/game-over check, the
+  block-reset-at-score-48 check, the block-collision-detection loop) runs
+  unconditionally every tick, same as the ball's own unconditional wall-
+  bounce movement check that precedes it. With no other genuine real-time
+  throttle left anywhere in the function (the "no timing model whatsoever
+  upstream" category), this runs at the engine's native tick rate with
+  each tick corresponding to one iteration of upstream's own uncapped
+  inner loop - ball/paddle speed is a best-effort approximation with no
+  real-hardware reference to calibrate against, the same open-ended
+  caveat as this project's other "no genuine rate to match" ports.
+
+  Two genuine upstream quirks preserved rather than "corrected": the
+  paddle's own draw loop (`for(pw=1;pw<platformWidth;pw++)`) sends
+  exactly 15 bytes starting at column `player`, not 16 - the paddle is
+  visually 15px wide despite `platformWidth=16` driving every collision/
+  movement-clamp calculation, ported literally since "fixing" it would
+  change the real shipped hit-box-vs-visual-width relationship. And the
+  ball's own byte computation (`1<<((bally%8)+1)`) can produce bit 8 when
+  `bally%8==7` - on real AVR `uint8_t` this silently truncates to 0 (the
+  ball is invisible for that one specific sub-page row, harmless since
+  nothing else depends on it), but Vircon32 `int`s don't truncate -
+  masked with `&0xFF` at the exact site, the same byte-truncation fix
+  class as this whole project's very first documented bug.
+
+  Sound: the game-over sweep (`for(i=0;i<1000;i+=50)beep(50,i)`) and new-
+  high sweep (`for(i=700;i>200;i-=50)beep(30,i)`) are, byte-for-byte, the
+  same loop shape already fixed for Stacker's own identical sweeps (same
+  author/boilerplate lineage) - reused via the same frame-stepped
+  sequencer approach and the same derived note tables rather than re-
+  deriving them from scratch. `collision()`'s own `beep(30,300)` can in
+  principle fire more than once in a single tick if the block-collision
+  loop re-triggers immediately (a ball corner clipping two blocks in the
+  same step) - Vircon32's audio channel has no queue, so a same-tick
+  double call would only ever be audible as the last one - left as-is
+  rather than built into a full sequencer, a deliberate, considered call
+  given how rare (at most 2 calls) this specific case is, unlike this
+  project's other found sound-burst bugs (computed sweeps firing tens to
+  hundreds of calls every single tick).
+
+  EEPROM high-score persistence dropped (session-only), matching every
+  other port's precedent - the "hold fire ~2s to mute/unmute" gesture is
+  kept (in-memory flag, same shape as Stacker/UFO's own); the combined-
+  cartridge-specific "hold fire+up/down at boot to reset both games' high
+  scores" gesture doesn't apply to a standalone menu entry and is dropped
+  outright, matching Stacker's own precedent exactly.
+
+  A 40fps whole-tick throttle was added at direct user request (first
+  requested as 30fps, then corrected to 40fps) - upstream has no genuine
+  real-time throttle at all (see this file's own header comment on the
+  broken/always-true `lastFrame` gate). Since 60 does not divide evenly
+  by 40, a plain integer tick-skip counter (`60/40`, which truncates to 1
+  and would silently produce 60fps instead) doesn't work - used the same
+  Bresenham-style accumulator this project first needed for Tiny
+  Gilbert's own 40fps target (`brkTickAccum += 40; if >= 60 then -= 60
+  and run one tick`), producing exactly 40 ticks per 60 real frames long
+  term rather than a truncated approximation. `brkWaitFrames` (the only
+  frame-counted constant in the file) was deliberately left unrescaled,
+  matching this project's own standing "one accumulator, no dual
+  bookkeeping" practice.
+
+  Verified via Puppeteer throughout development: the attract screen
+  ("BREAKOUT" title, both credit-line font substitutions rendering
+  correctly, the mute toggle), active gameplay (paddle movement, ball
+  bouncing off walls, blocks being destroyed one at a time), and -
+  reached naturally during an autoplay soak test, not specifically forced
+  - a complete game-over-to-new-high-score-to-attract cycle, confirming
+  the whole state machine and note sequencer work correctly end-to-end
+  without needing a dedicated debug hook. Re-verified after the 40fps
+  accumulator throttle was added: gameplay still renders and transitions
+  correctly (a second autoplay run reached game over again cleanly).
+  Measured via the perf overlay during normal play: 39% CPU gameplay,
+  66% attract screen (the attract screen's own text/credit rendering is
+  not gated by row/call-site the way several other games' own attract
+  screens eventually needed - both readings are comfortably under budget
+  as shipped, so no optimization pass was needed this time). The full-
+  grid-cleared block-reset (`score%48==0`) was not independently
+  witnessed this session - would require destroying all 48 blocks in one
+  playthrough - but the logic is a direct, unmodified port of upstream's
+  own check, run every tick exactly like everything else in the frame-
+  action block.
+
+- `src/games/gameSpaceAttack.c` - Space Attack (Andy Jackson, non-
+  commercial-with-attribution; ATtiny-Joypad port by Billy Cheung, 2018 -
+  credited "ANDY JACKSON" in the menu). A classic Space-Invaders-style
+  shooter: 3 rows of 14 aliens step left-right-then-down as a block,
+  occasionally firing back, while a passing "mothership" bonus target
+  crosses the top for big points. Second of the 3 games found via the
+  `more games/gametiny/` re-verification (see that folder's own catalog
+  entry and this file's own Status intro above) - the game the user
+  specifically named when pushing back on the earlier "same genre as Tiny
+  Invaders, skip it" reasoning, confirmed via direct reading to be a
+  genuinely distinct codebase by a different author (Andy Jackson, not
+  Daniel C/Sven B) with its own mothership mechanic and scoring model.
+  `SpaceAttackAttiny2but` (a 2-button-hardware control variant, confirmed
+  via a 119-line all-comment/control-mapping diff) isn't ported
+  separately - TinyJoypad's own real dedicated fire button makes the
+  non-`2but` version the natural fit.
+
+  Same `gametiny`/Andy-Jackson-family boilerplate as Breakout (this
+  game's own `font6x8AJ.h` byte-diffed identical to Stacker/Breakout's
+  copy; needed no new shim; EEPROM dropped, hold-fire-to-mute gesture
+  kept). Upstream's own alien/mothership/fire timing counters
+  (`aliencounter`/`firecounter`/`mothercounter`) are plain per-iteration
+  tick counters with no real `millis()` reference anywhere in the actual
+  gameplay loop (confirmed directly - every `millis()`/`delay()` call in
+  the file is in the attract/game-over screens, none inside
+  `playSpaceAttack()` itself) - the "no timing model whatsoever upstream"
+  category, ported with a direct 1-engine-tick = 1-upstream-iteration
+  correspondence. Upstream's own "burn clock cycles" loop (padding out
+  each iteration's real duration as fewer aliens remain, to keep the bare
+  AVR loop's speed roughly constant) is a pure real-time-compensation
+  artifact with no equivalent need on a fixed-tick-rate engine - dropped
+  entirely rather than ported as pointless extra draw calls. The attract
+  screen's own elaborate ~91-frame slide-in animation was simplified to a
+  static screen (title, the small decorative alien-formation graphic
+  upstream also draws statically before that animation starts, credits,
+  platform) - a deliberate effort/fidelity tradeoff for a purely cosmetic,
+  non-gameplay sequence.
+
+  **A real, genuine bug found via direct user report right after
+  shipping** ("please check enemy bullets and their spawning and so
+  something is off"): `spaAlienFireActive`/`X`/`Y` were declared as
+  `int[3]` instead of `int[SPA_MAX_ALIEN_FIRE]` (5) - a straightforward
+  transcription slip, mixing up upstream's own `alienFire[5][3]`'s two
+  dimensions (5 concurrent shot slots, 3 fields each) when splitting it
+  into 3 parallel arrays. Every loop in the file iterates
+  `for(i=0;i<SPA_MAX_ALIEN_FIRE;i++)` (5 iterations), so indices 3 and 4
+  read/wrote past the end of these 3-element arrays on every single
+  tick - a genuine out-of-bounds memory access, not just a logic bug,
+  matching this project's own well-documented "ERROR: INVALID MEMORY
+  READ/WRITE" bug class. Fixed by correcting all 3 declarations to
+  `int[5]`. Found and fixed via direct code inspection (grepping every
+  `spaAlienFireActive`/`spaAlienFireX`/`spaAlienFireY` reference and
+  checking each declaration against its own real usage bound) rather than
+  by guessing from symptoms.
+
+  **A second, subtler real bug found via the user's own direct follow-up
+  question** ("does the game have an upstream fps lock" led to re-
+  tracing every `fire`/`playerFire[0]` read in the original source,
+  which surfaced this): an earlier draft gated the mothership/alien-
+  collision-check block on a fresh `isFirePressed()` **level** read
+  (`fireHeld`) rather than on `spaPlayerFireActive`. Tracing upstream's
+  own `fire` flag (interrupt-set on the physical button, but *only ever
+  cleared when a shot resolves* - never on button release) shows it
+  moves in lockstep with `playerFire[0]` for a shot's entire flight, so
+  upstream's own `if(fire==1){...}` gate around the collision checks
+  really means "is a shot currently in flight", not "is the button still
+  physically held". Gating on a live level read instead would have
+  frozen an in-flight shot un-checked the instant the player released
+  Fire before it resolved - a real, if narrow, gameplay bug (releasing
+  Fire early would make a shot pass through aliens harmlessly). Fixed by
+  switching that gate to `spaPlayerFireActive` (already updated by the
+  Y-advance/resolve step immediately above it in the same tick) - the
+  live button read is now only ever used to decide whether to *start* a
+  new shot.
+
+  **A real CPU-budget problem, also found via a direct user report**
+  (screenshots taken during this same investigation happened to show
+  93-98% CPU during gameplay) - `spaComputeByte()`'s first draft queried
+  every one of 1024 pixels/frame individually: an alien-grid lookup per
+  pixel, plus a 5-slot alien-fire scan *per pixel* (5120 checks/frame) to
+  find columns that are almost always empty - the same O(pixels x
+  objects) shape this project has repeatedly found and fixed elsewhere.
+  Fixed with `spaComposeRow()`, compositing each page's own real content
+  (aliens/mothership/platform/fire) into a shared row buffer once per
+  page, touching only each feature's own real, narrow column range.
+  Measured via the perf overlay: gameplay CPU dropped from 93-98% to a
+  steady 44%, with rendering confirmed pixel-identical via screenshot
+  (full 14-alien formation, platform, score, and multiple simultaneous
+  enemy bullets at different heights all still correct) before and after.
+  The attract screen (78% CPU) and level-up screen were not given the
+  same row-buffer treatment this pass - both are comfortably under
+  budget as measured, so left as-is rather than optimized pre-emptively.
+
+  A direct user request to audit for the established "8-bit vs 32-bit"
+  bug family (byte truncation, shift wraparound, signed sentinels,
+  `rand()` range) came back clean: the file's only two shift operations
+  are both in `spaFireColumnByte()`, already explicitly `&0xFF`-masked
+  where needed, and both provably only ever operate on non-negative,
+  bounded (0-7) values - `spaPlayerFireY`/`spaAlienFireY` are traced to
+  never go negative (initialized non-negative, only ever incremented or
+  decremented down to exactly 0). No raw `rand()`/`random()` calls (all
+  routed through `arand()`), no `0xFF`/`0x80`-style sentinel comparisons
+  anywhere in the file.
+
+  A separate, deliberate design decision (not a bug) preserved rather
+  than "fixed": `fireXidx`/`fireYidx` (the player-shot-to-alien-grid
+  mapping) are computed upstream via `floor(intExpr)`, but since both
+  inner expressions are already plain `int/int` division (which
+  truncates toward zero in C, not a real float division), the `floor()`
+  calls are no-ops applied to an already-integer value - ported as plain
+  integer division with no special negative-number handling, faithfully
+  reproducing upstream's real (imperfect) behavior rather than "fixing"
+  it into a genuine floor division upstream itself never actually
+  performed.
+
+  Verified via Puppeteer throughout (including full re-verification after
+  both bug fixes): the attract screen (title, decorative alien graphic,
+  both credit-line font substitutions, platform), the LEVEL 1 transition
+  screen, active gameplay (the full 14-alien formation descending,
+  platform movement, score display), and multiple simultaneous enemy
+  bullets at different flight heights all render correctly. Not
+  independently forced this session: a full level-clear (defeating all 14
+  aliens to reach level 2), a mothership kill, and a player-death/game-
+  over sequence - all three reuse logic paths that are otherwise direct,
+  unmodified, already-scrutinized ports of upstream's own code, so risk
+  is low, but worth a direct check if anything looks off.
+- `src/games/gameFallingBlocks.c` - a falling-block puzzle clone (upstream
+  folder is the "multi-button" variant catalogued in `more games/gametiny/`
+  above; Andy Jackson, non-commercial-with-or-without-attribution;
+  ATtiny-Joypad port by Billy Cheung, 2018 - credited "ANDY JACKSON" in
+  the menu). Last of the 3 games found via the `more games/gametiny/`
+  re-verification (see that folder's own catalog entry and this file's
+  own Status intro above). Upstream's own header comment describes it as
+  "essentially a clone of [the well-known falling-block puzzle game
+  already referenced in this file's own `more games/gametiny/` catalog
+  entry above] by Anthony Russell, with some additional features"
+  (Highscore, an optional Ghost/
+  Shadow piece, and a Hard/Challenge mode that seeds the board with junk
+  at the start). Confirmed via direct reading to be a genuinely distinct
+  codebase from Daniel C's own Tiny Tris (different author, different
+  from-scratch rendering/engine code, different data representation),
+  sharing nothing with it but the genre itself.
+
+  **Deliberately named/credited without the trademarked genre name it's a
+  clone of, anywhere in this project's own menu, documentation, or even
+  its own attract-screen text** - that genre name is a registered
+  trademark, and the user was explicit that it may not appear in the menu
+  or in any markdown file. Checked whether the genre name shown on the
+  attract screen was baked pixel/bitmap data (which would have had to
+  stay as shipped) or a plain font-rendered string - it turned out to be
+  a literal `tetCharByte("...", 6, 1, 64, ...)` string call, genuinely
+  different from the separate decorative brick/diamond logo graphic next
+  to it (`tetBrickLogo`, real bitmap data that doesn't spell out any word
+  at all) - so it was simply changed to "BLOCKS" in the source, at direct
+  user request, rather than needing to stay as shipped. The file itself
+  was renamed from an initial working filename (also containing the
+  trademarked genre word) to `gameFallingBlocks.c` (with every entry-point
+  function renamed to `gameFallingBlocks_init/update/forceRedraw`
+  throughout, `main.c`'s own `#include` updated to match) once the user
+  asked for the C file itself to be renamed too - the internal `tet`
+  prefix on every other identifier was left alone (a short abbreviation,
+  not the trademarked word itself spelled out), since internal
+  identifiers aren't user-facing either way.
+
+  Not `tinyJoypadShim`/`obonoCoreShim` lineage by name, and genuinely more
+  structurally different from every other `gametiny`/Andy-Jackson-family
+  port so far - needed no new shim (same A0/A3 500-750/750-950 analog
+  thresholds as every other game in this family), but its own rendering
+  model is unique in this project: **the OLED is driven sideways**. Every
+  other TinyJoypad game treats the 128 physical columns as the visual
+  width and the 8 pages as the visual height; this game's own
+  `ssd1306_char_f8x8()`/`drawScreen()` instead treat physical *pages* as
+  the board's column axis and physical *columns* as the board's row axis
+  (each board row is 6 physical columns wide; each on-screen text
+  character occupies one whole physical page). Ported by building the
+  per-(physColumn,physPage) query function directly around this rotated
+  mapping (`tetReaderForPage()` maps a physical page to the logical board
+  column it displays, each page showing 2 overlapping logical columns),
+  rather than trying to "un-rotate" it into a more conventional layout -
+  safer than second-guessing a coordinate scheme this intertwined with
+  the game's own data layout.
+
+  `blockArray[10][3]`/`ghostArray[10][3]` are byte-packed bitfields
+  upstream (24 rows packed 8-per-byte, addressed via shift/mask trickery)
+  - a real RAM-saving trick with no benefit on Vircon32. Tracing the exact
+  shift arithmetic for row 23 (the top spawn-buffer row) revealed it only
+  stays safe on AVR because of two AVR-specific narrow-type behaviors
+  already documented elsewhere in this project as not portable (a
+  `uint8_t & (1<<8)` always being 0, and AVR-GCC's variable-shift-count
+  codegen saturating to 0 past the operand width) - ported instead as a
+  plain `bool[10][24]` grid with the identical read/write interface,
+  correct by construction, avoiding the whole shift-arithmetic hazard
+  rather than working around it.
+
+  Upstream's own real per-piece drop timer (a genuine, real-time-based
+  rate: `(millis()-moveTime) >= DROPDELAY-level*LEVELFACTOR`) was
+  converted to a frame-counted `tetDropFrames` derived directly from the
+  same formula. `handleInput()`'s own busy-wait-for-release debounce
+  (a real-hardware noisy-button workaround Vircon32's clean digital reads
+  don't need) was dropped for plain edge-detected presses, matching this
+  project's established simplification for every other `gametiny` port's
+  real-hardware debounce code. The line-clear-and-shift scan is a direct
+  1:1 translation of upstream's own algorithm (already correctly handles
+  multiple simultaneous full rows via its own re-check-same-index
+  behavior); upstream's own brief per-row visual flash before each row's
+  shift is resolved instantly in the same tick instead, a deliberate
+  effort/fidelity tradeoff for a ~30ms cosmetic detail, matching this
+  project's own precedent for comparably brief purely-decorative
+  flourishes elsewhere (e.g. Space Attack's own dropped slide-in
+  animation). Two multi-`Sound()`-call bursts (the line-clear "happy
+  sound" and the game-over sweep) were converted to small frame-stepped
+  sequencers from the start, matching this project's now-standard fix for
+  Vircon32's queueless audio channel - the game-over sweep is byte-for-
+  byte the same loop shape already fixed for Stacker/Breakout/Space
+  Attack's own identical cues (same author/boilerplate lineage), reused
+  via the same derived note table.
+
+  **A real, pre-existing upstream bug, confirmed independently via a
+  small script before ever building anything**: this game's own
+  `font8x8AJ.h` is a "hacked" 51-glyph subset with 4 deliberately-
+  relabeled slots (typing 'b'/'f'/'g'/'h' in a source string actually
+  renders an n/r/y/t-shaped glyph instead, the same trick already seen in
+  Wren/Bat Bonanza/Stacker's own fonts) - but tracing `ssd1306_char_f8x8()`'s
+  own index formula against the game's *own real UI strings* shows most
+  of them contain lowercase letters that were never remapped to a
+  substitute slot at all (`"Attiny"`'s own two 't's, its 'n', its 'y';
+  `"Arcade"`'s own 'r'; `"Andy-J"`'s own 'n' and 'y'), computing out to
+  indices 53-64, genuinely past the 51-entry table. This isn't a porting
+  mistake - it reproduces upstream's own literal formula and literal
+  strings exactly - it looks like a genuine, shipped bug in the original
+  game (harmless-but-undefined PROGMEM overrun on real AVR flash, never
+  caught/fixed), affecting its own title-screen credit text. A true
+  out-of-bounds read is a real memory-safety risk on Vircon32, so
+  `tetFontIndex()` clamps any out-of-range result to the blank/space
+  glyph (index 0) - a safety fix, not an attempt to guess what the
+  "correct" glyph should have been, since upstream's own real behavior
+  for these specific characters was already undefined. The garbled-
+  looking "A"/"cade" credit-line fragments visible on the attract screen
+  are this exact preserved-but-safety-clamped bug, not a new porting
+  defect.
+
+  **A critical, self-inflicted bug found via direct user report right
+  after the first build** ("the game seems to behave totally wrong
+  immediately ending in game over"): `gameFallingBlocks_update()`'s
+  PLAYING branch called `tetCheckCollision()` a second time *after*
+  `tetDrawPiece(0)` had already committed the current piece into
+  `tetBlockGrid` - so the check always found the piece "colliding with
+  itself," triggering game-over on literally the first drop tick, every
+  time. Diagnosed and fixed via pure code inspection, per the user's
+  explicit "do not playtest just check code" instruction - grepped every
+  `tetCheckCollision()` call site and traced the exact draw/erase/check
+  ordering at each one, confirming the other four sites (inside
+  `tetCreateGhost()`, `tetMovePieceLeft/Right()`, `tetRotatePiece()`) were
+  all structurally correct, since each happens while the piece is
+  genuinely erased from the grid. **Fixed** by adding a `tetGameOverFlag`
+  global, set only inside `tetMovePieceDown()` itself at the one correct
+  moment to detect this - immediately after a freshly-loaded next piece
+  is found to already collide with the existing stack, *before* it's ever
+  drawn into the grid - with the caller checking that flag instead of
+  redundantly re-checking collision post-draw. Verified via Puppeteer
+  (without playtesting the bug itself, only the already-applied fix):
+  the game now survives repeated drops, movement, rotation, and a
+  soft-drop with no premature game-over.
+
+  **A real CPU-budget problem, found in the very same user report**
+  ("...it's also reaching 100% cpu easily") - confirmed via the perf
+  overlay both on the attract screen and during gameplay. Root cause was
+  the by-now-familiar "self-gated call still costs a full call every time
+  it's invoked" shape, in two different places: (1) `tetGameByte()`
+  recomputed `tetBlockAt()`/`tetGhostAt()` (each its own function call)
+  fresh for every one of 1024 pixels/frame during PLAYING, even though a
+  board row is 6 physical columns wide - the same cell lookup was being
+  redone 6 times in a row for an identical result; (2) the ATTRACT
+  screen's fixed title text (the trademarked-genre-name string described
+  above, plus `"Attiny"`/`"Arcade"`) and the GAME OVER screen's 12 score/high-
+  score digits were each called via `tetCharByte()`/`tetDigitByte()`
+  unconditionally across all 1024 pixels/frame, despite each only ever
+  being nonzero within its own narrow (page,column) footprint. **Fixed**
+  with `tetComposeGameRow()` - a per-page composite buffer
+  (`tetPageBuffer[128]`) that computes each board row's block/ghost state
+  once (not once per sub-column) and writes all 6 sub-column bytes from
+  that cached result - for PLAYING mode, plus call-site gating (a literal
+  duplicate of each callee's own internal bounds check, not an
+  approximation) for every `tetCharByte()`/`tetDigitByte()` call in
+  ATTRACT/GAME OVER mode, the same techniques already proven in Tiny
+  Doc/Tiny DDug's row-scoped caching and Arkanoid/Bert/Tris/Trick/
+  Morpion's call-site gating. Measured via the perf overlay: attract
+  screen dropped from a pegged 100% to 5-6%, gameplay from a pegged 100%
+  (with a visibly truncated frame - only a few blocks in one corner
+  rendered before cutting off, this project's own documented "frame
+  truncated mid-instruction-stream" signature) to a steady 5-9%, with
+  rendering confirmed pixel-identical via screenshot both before and
+  after.
+
+  Verified via Puppeteer: the attract screen (title, decorative brick
+  logo, and the credit lines including the preserved font-index-clamp
+  bug), active gameplay surviving well past the first several drops (no
+  premature game-over), left movement, rotation, and a held soft-drop all
+  render and behave correctly, across a session spanning several
+  automatic and manual piece placements with the board visibly
+  accumulating locked blocks. A full line-clear and a genuine game-over
+  (rather than the fixed false-positive one) were not independently
+  forced this session - both reuse logic paths that are otherwise direct,
+  unmodified ports of upstream's own already-working algorithms, so risk
+  is low, but worth a direct check if anything looks off.
+
+## Menu thumbnail atlas fully regenerated from a sibling project's clean screenshots
+
+Every one of the 40 thumbnails documented above (added incrementally,
+game by game, across this whole session) had been captured via this
+project's own Puppeteer/WebGL test harness - a real browser page, not a
+bare emulator window. Asked directly to redo them, since the harness's
+own on-page UI (the F6 perf overlay's CPU/GPU bars when left toggled on,
+the page's own "FPS: NN"/info-icon readout and "Fullscreen" button baked
+into the bottom-left/bottom-right corners of every capture) had been
+bleeding into some of the saved thumbnails instead of being cropped out
+cleanly every time.
+
+Rather than re-capture all 40 games again through the same browser
+harness (repeating the same contamination risk), reused the sibling
+`c:\github\Tinyjoypad_SDL` project's own `metadata/screenshots/` folder -
+40 real gameplay screenshots, one per game, already genuinely clean (a
+native SDL window capture, no browser chrome of any kind) - confirmed by
+direct inspection of several before trusting the whole batch. Confirmed
+via a scripted diff that this project's own 40 `addGame()` menu titles
+(`menuGameList.c`) and that folder's own 40 filenames are an exact 1:1
+match (same title strings, same count) - not just a name-similarity
+guess. Each source image is 640x360 (the same native resolution this
+project's own captures already used) with the identical 20px top/bottom
+black letterbox convention already established here (confirmed both
+strips read as pure black via ImageMagick's own mean-pixel-value check
+before cropping) - so the existing crop-to-640x320-then-downscale-to-
+256x128 pipeline applied unchanged, no new asset-processing step needed.
+
+Rebuilt both atlas textures completely from scratch (not patched cell-
+by-cell) - `assets/thumbnails.png` (the 4x8, 32-cell first atlas) and
+`assets/thumbnails2.png` (the 4x2, 8-cell second atlas, needed only
+because Vircon32 caps a single texture at 1024x1024 - see this file's
+own earlier history for why a second texture exists at all) - composited
+in the exact same `addGame()` registration order every prior thumbnail
+addition already relied on (region id == registration index, first 32
+games in the first atlas, the remaining 8 in the second). Verified via
+Puppeteer across every one of the menu's 5 pages that every thumbnail
+still displays correctly and in the right position (spot-checked 2048,
+Falling Blocks, NumberPlace, Tiny Minez, and the last page's Tiny Tris/
+Tiny Rog/UFO/Wren Rollercoaster row) with no leftover browser-chrome
+artifacts in any of them.
+
+## Tiny Mania - staged straight from a live tinyjoypad.com check, then ported the same session
+
+Discovered via a direct user request to re-check tinyjoypad.com/
+tinyjoypad_attiny85 for anything new - confirmed via WebFetch that "Tiny
+Mania" had just been listed there (first-release date on the site itself:
+2026-08-04, one day before this check). Staged into `more games/Tiny
+Mania/TinyMania/` the same way as every other official Google-Drive-only
+"Tiny X" title (downloaded, unzipped, no renaming) - confirmed
+**Programmer: Daniel C, 2026, GPLv3**, same `ELECTROLIB.h`/
+`FastTinyDriver.h` driver lineage as most other Daniel-C titles here.
+A Pac-Man-style maze/ghost-chase game, but with a genuine mechanical
+addition the already-shipped Tiny Pacman doesn't have: pressing Fire
+triggers a fixed jump-height animation (`Jump[]`/`JmpSeq`/`JmpPos`) that
+lets the player pass safely over a normal ghost mid-air - the actual
+signature mechanic of the real arcade game "Pac-Mania" this name
+references - confirming this is a genuinely distinct title, not a
+duplicate, before committing to port it.
+
+Not `tinyJoypadShim`/`obonoCoreShim` lineage by name, but needed no new
+shim (`ELECTROLIB.h`'s own A0/A3 500-750/750-950 thresholds and the
+shared Fire-button digital read exactly match every other Daniel-C game
+here). **Rendering reuses Tiny Arena's own half-resolution-buffer
+technique directly** - this game's own `VBuffer[4][64]` is the same
+64x32-doubled-2x-both-ways-via-nibble-expansion model as Tiny Arena's
+raycaster (`arVBuffer`/`arSliceByte`/`arExpand`, the exact same 16-entry
+expand table reused here as `tmnExpand`), so no new machineDependent
+primitives were needed. `tmnDrawSprite2Bit()` is a direct port of
+upstream's own two-plane (white/black-mask) sprite blitter. The bottom
+hardware row (physical page 7) is a genuine exception to the plain 2x-
+doubled model: upstream's own `Tiny_Flip()` replaces specific column
+ranges there with a *stateful, sequential* score-digit/lives-icon reader
+(`Recup_Digital`/`Recup_Lives`, each advancing its own persistent cursor,
+called twice per half-res column to produce two independently-resolved
+real columns) - ported as `tmnComposeRow7()`, computing the whole 128-
+byte real row into a cache once per frame by walking the exact same
+loop shape as upstream, the same "reproduce an intricate stateful
+algorithm's own shape rather than re-derive a closed form" reasoning
+already used for Frogger's own row-buffer compositing.
+
+**By far the largest number of blocking-delay-to-state-machine
+conversions of any port in this project to date**, including one genuine
+blocking `while(1)` busy-wait (the attract screen's own confirm gesture,
+converted to a plain press/release edge check, the same "arm against
+whatever's already held" reasoning as `md_armInputFireGate()`) and a
+whole family of real, multi-hundred-millisecond pauses following nearly
+every non-trivial game event: starting a game, restarting a level,
+advancing a level, clearing every dot (a real 58-note fanfare sequencer),
+eating a ghost, and dying (a real 27-note `PLAY_MUSIC(DeadSong)`
+sequencer). A genuinely subtle real upstream mechanic lives inside the
+fade-transition machinery: `RESTART_LEVEL()`'s own "if no lives left,
+re-trigger a *second*, nested fade-out-then-in cycle ending in the
+attract screen instead of a restarted level" - reproduced with a third
+`tmnFadeActive` value (3, "holding fully black") and the nested-retrigger
+guard deliberately placed to avoid the exact "shared 'wait complete'
+dispatcher clobbering its own callee's new state" bug class this
+project's own Tiny Invaders history already documents. See the file's
+own header comment for the full mapping of every conversion.
+
+**A genuine out-of-bounds read, caught proactively while investigating a
+separate CPU-load report, not by a crash**: several of the attract
+screen's own decorative sprite tables (`Start2`, `TinyMania2`, and two
+now-removed ones) are declared upstream with only a single data plane,
+not the two (white+black) `drawSprite2Bit()`'s own formula generally
+expects - harmless on real AVR PROGMEM (an adjacent-flash-byte read
+that's simply never acted on, since every one of these tables is only
+ever called with `mono=false`, and the black plane is only ever
+meaningful when `mono=true`), but a genuine out-of-bounds global read on
+Vircon32. **Fixed** by skipping the black-plane read entirely whenever
+`mono` is false, matching how every one of these tables is actually used
+- not a guess, confirmed by checking every real call site.
+
+**A real, substantial CPU-load problem, found via the perf overlay before
+ever calling the port done** - both the attract screen and active
+gameplay read a pegged 100%. Root-caused and fixed in stages, each
+measured before moving to the next:
+1. The attract screen's own border decoration was, itself, upstream's
+   own design: drawing each solid horizontal/vertical border line one
+   pixel-column at a time via 286 individual `drawSprite2Bit()` calls (a
+   real-AVR-hardware-tolerant technique, the same "fine on real hardware,
+   not under this project's own per-call-overhead-dominated model" shape
+   already found and fixed elsewhere - Tiny Trick's background lookup,
+   Tiny Bike's bomb rendering, etc). Replaced with direct `tmnVBuffer`
+   writes (the exact same pixels, computed once as constants or a tight
+   loop with no function-call overhead at all) - measured: 100% -> 46%.
+2. `tmnDrawLevel()`'s own per-cell ghost lookup scanned all `tmnNbGhosts`
+   ghosts for *every* one of the ~168 cells its scan visits (up to 1176
+   redundant comparisons/frame) - the same O(cells x objects) shape this
+   project has repeatedly found and fixed (Bomber/Pacman/Missile's own
+   render loops). Fixed with a small per-cell bucket-linked-list index
+   (`tmnGhostCellHead`/`tmnGhostCellNext`, built once per frame in
+   O(ghosts) instead of scanned in O(cells x ghosts)) - genuinely needed
+   the *list* shape, not a simple one-ghost-per-cell lookup, since every
+   ghost shares the exact same spawn cell right after a level/life
+   starts (`GridX` isn't reset per-ghost, only `GridY` is shifted
+   uniformly) - a single-slot lookup would have silently dropped
+   overlapping ghosts. Iterating ghosts high-to-low while prepending
+   preserves upstream's own exact ascending draw order for any ghosts
+   genuinely sharing a cell.
+3. Measured again with walls/dots re-enabled: still 100%. Isolated via
+   temporary debug toggles (background walls only, dots only, floor with
+   no sprite draws at all) rather than guessing - found the *floor* (no
+   sprite draws, just `tmnTinyFlip()`+bookkeeping) is 26%, dots+player+
+   ghosts together cost another ~20 points, and walls alone cost the
+   rest (~54 points) - because unlike Dot/BigDot's own mostly-transparent
+   art, a wall tile's own dense checkered-dither pattern never benefits
+   from `tmnDrawSprite2Bit()`'s own "skip an empty column" early exit.
+   Added `tmnBlit9x7()`, a specialized blitter for the one w=9,h=7,
+   1-frame,2-plane shape Block1/Block2/Dot/BigDot all share (skipping
+   the generic function's own frame/plane-size arithmetic, which is
+   compile-time-constant for this specific shape) plus hoisting
+   `tmnResolveBlocks(tmnBLKs)` out of the per-cell loop (it was being
+   re-resolved on every one of up to ~90 wall draws despite being
+   constant for the whole frame) - measured: dots+player+ghosts alone
+   dropped from 66% to 46% (confirming the specialization helped
+   meaningfully), but the *combined* total with walls re-enabled stayed
+   at a measured-capped 100%, since walls' own dense art is the
+   inherently larger remaining cost and the perf meter can't show how
+   far over budget a pegged reading actually is.
+   A further, more aggressive fix (batching a wall column's whole 7-bit
+   run into 1-2 direct writes instead of a 7-iteration bit loop) was
+   initially judged not worth attempting in this same pass - it would
+   need right-shifting a sometimes-negative row coordinate to compute a
+   half-res page index, the exact "Vircon32's `>>` is a *logical*, not
+   arithmetic, shift" hazard already documented elsewhere in this file
+   (HollowSeeker's own bug) - deferred rather than risked under the time
+   available to verify it thoroughly at that point in the session. Later
+   revisited and shipped successfully (after a real, user-reported false
+   start) once a 30fps throttle and other fixes freed up time to verify
+   it properly - see this game's own later write-up below for the full
+   story, including the actual bug that first attempt had (not the
+   shift-safety hazard itself, which the design correctly avoided, but a
+   plain reversed-shift-direction arithmetic mistake one step later).
+
+**A real timing bug, found via a direct user report comparing this port
+against real footage of the original game**: "when catching a ghost
+there is a pause but this pause in our port is way longer than on real
+hardware." Root-caused precisely, not just downsampled by feel: eating a
+frightened ghost (and dying, and picking up a plain fruit) all share the
+exact same upstream sound cue, `SoundSystem(1)` - a real 31-iteration/
+62-note sweep whose *individual* `Sound()` calls are each well under 1ms
+(computed directly: real total duration ≈76ms across all 62 notes,
+averaging 0.72ms each), but this project's own frame-stepped sequencer
+can't represent a note shorter than one real 60fps tick (~16.67ms) - so
+porting all 62 notes 1:1 forced each one to consume a minimum of one
+full real frame regardless of its own true sub-millisecond duration,
+stretching a ~76ms sound effect out to *over a full second* (a ~13.6x
+inflation, confirmed via direct computation, not estimation). **Fixed**
+by downsampling the shared note table (`tmnGubFreq_Dur`) from 62 notes to
+16 (keeping every 8th iteration - 1,33,65,97 - preserving the audible
+"descending sweep" character) - landing at ~267ms, a ~3.5x reduction from
+the broken ~1033ms and much closer to the real ~76ms, while still giving
+a clearly multi-step, non-instantaneous sweep. The same audit found the
+level-clear fanfare has a much milder version of the same issue (real
+~621ms vs. this port's ~967ms, only a 1.56x inflation, not the reported
+symptom) - left as-is rather than fixing an issue nobody reported, since
+its real and ported durations are already close enough not to be
+perceptually "way longer."
+
+**A 30fps whole-tick throttle, requested directly once the CPU
+investigation above concluded further per-call optimization had
+diminishing returns**: `TMN_TICK_DIVISOR=2`, the same whole-function
+tick-skip shape already established for NumberPlace/HollowSeeker/t2048/
+Doc/Pacman/Pipe (not the movement-only/render-stays-60fps shape used for
+Trick/Invaders/Pinball/Bert) - the right choice here specifically
+*because* rendering, not movement logic, is the expensive part, so a
+movement-only throttle would have left the real cost untouched. A
+skipped tick returns before ever calling `md_beginFrame()`, so the
+previous frame's own pixels simply persist rather than flashing black.
+Measured via the perf overlay's own history graph (not just the
+instantaneous reading, which is misleading under a throttle - see below):
+attract screen dropped to ~4%, active gameplay's *average* load dropped
+from a sustained pegged 100% to roughly half that. **Confirmed via the
+overlay's own rolling history bars that this halves *average* load by
+alternating cheap (skipped) and full-cost (real) frames, but does
+*not* reduce the peak cost of the frames that still run full logic** -
+those still read close to 100% individually, same as before the
+throttle, since nothing about their own per-frame work changed. Real,
+useful headroom for average/thermal purposes, but not by itself a fix
+for a single frame's own risk of exceeding the hard 250,000-cycle
+budget - worth remembering as a distinction for any future CPU
+investigation in this project, since the perf meter's instantaneous
+reading alone can't tell the two apart.
+**Sound was the one deliberate exception to this project's own standing
+"leave every wait constant unrescaled under a tick throttle" practice**:
+both note sequencers' own wait-frame formula is rescaled against the
+*logic* tick rate (30fps) rather than the engine's native 60fps, so
+every sound keeps its original real-time pace despite gameplay itself
+now advancing at half speed - every other frame-counted pause in the
+file (the 15/30/48/60-frame waits) was deliberately left alone and
+simply now takes twice as long in real time, matching this project's
+usual approach everywhere else.
+
+**A second, more careful attempt at batching the wall-column write
+(after the first one below), successfully fixed and shipped**: the
+initial version's sign-safety reasoning (never shifting the
+potentially-negative row coordinate directly) was sound, but the very
+next step had a plain arithmetic mistake - the shift *direction* was
+backwards in both branches (a page starting "at or after" the source's
+own row needs the source shifted *right* to align with it, not left,
+and vice versa), plus both boundary guards were off by one. Confirmed
+via a direct user report right after shipping ("this introduced bugs in
+wall drawing and scrolling of them") - reverted immediately rather than
+debugging live, then re-derived the whole mapping from scratch
+algebraically (`row = y0+i = page*8+b` => `b = i - shift` where
+`shift = page*8-y0`) and validated the corrected version against a
+20,000-case randomized brute-force comparison against the original
+per-bit loop *before* ever putting it back in the game - the same
+"don't trust reasoning alone, verify" lesson this project has needed
+repeatedly elsewhere, just applied via an offline script instead of an
+in-engine screenshot, since this is pure bit arithmetic with no
+rendering dependency to screenshot in the first place. Re-verified
+in-engine afterward with a dedicated 4-direction continuous-scrolling
+sweep (the exact scenario the user reported as broken) - no corruption
+in any direction. The user separately confirmed the *attempt* (even the
+initially-broken version) measurably helped CPU, motivating the second,
+corrected try rather than abandoning the idea after the first revert.
+
+**Two more real bugs found via direct user reports after the above
+shipped, both fixed and independently verified via a temporary debug
+hook** (`tmnPacCollision()` forced to `return 1` unconditionally, so
+every real tick triggers a death - removed again once each fix was
+confirmed):
+1. *"we have 3 pacman lives it seems but if we hit a ghost its
+   immediatly game over"* - a genuine bug, not a perception issue.
+   `tmnMenuFadeSelect()`'s own trigger==2 branch needed to detect whether
+   `tmnRestartLevel()` had itself just triggered a *nested* re-fade (the
+   real "last life lost, go straight to attract" upstream mechanic
+   already documented above) so it wouldn't clobber that re-trigger's
+   own setup - but the guard checked `tmnFadeActive != 1`, and
+   `tmnFadeActive` is **already** 1 at that exact point regardless of
+   which branch `tmnRestartLevel()` took (both the "still have lives"
+   case, which never touches it, and the nested `tmnFade2Black(0)` call,
+   which sets it to the *same* value 1) - so the condition could never
+   actually distinguish the two cases, meaning the "normal" branch's own
+   `tmnFadeActive=3` transition never ran *at all*. The very next tick's
+   `tmnUpdateFadeSequence()` found `tmnFadeActive` still 1 and `tmnFadeFrame`
+   still 0, so it re-entered and called `tmnMenuFadeSelect()` again -
+   and again - decrementing `tmnPacLives` once per real tick until it
+   hit 0, all within a handful of frames, indistinguishable from "instant
+   game over" to a player despite the death/respawn logic itself working
+   correctly. **Fixed** by checking `tmnFadeTrigger` instead (it
+   genuinely differs between the two cases - stays 2 normally, becomes 0
+   the instant a nested re-trigger runs). Verified with the forced-death
+   hook: lives now visibly step down 3 -> 2 -> 1 across three genuine
+   ~7.5-second real-time cycles (each including the full gub-sound-sweep
+   + two 1-second-equivalent pauses + death song + fade transitions, all
+   correctly lengthened by the 30fps throttle) before finally reaching
+   attract, rather than vanishing within a frame or two.
+2. Requested directly ("is the drawing of the ui elements (score /
+   lives) optimized?") - it wasn't: `tmnComposeRow7()` recomputed the
+   entire row (including up to ~40 `tmnRecupDigital()`/`tmnRecupLives()`
+   calls) every single frame regardless of whether the score or lives
+   had actually changed since the last one. Added a dirty-flag cache
+   (`tmnHudDirty`/`tmnHudCache`/`tmnHudIsCol`, matching Tiny Doc's own
+   established row-scoped caching precedent) - `tmnRebuildHudCache()`
+   only re-runs the cursor-threaded digit/lives lookup when
+   `tmnScores()`/`tmnResetScores()`/`tmnRestartLevel()` last actually
+   changed the underlying values, set once explicitly at boot too for
+   defensive safety. The level-background portion of the same row
+   genuinely changes every frame (camera scroll) and is deliberately
+   *not* cached, only merged with the cached HUD portion per frame.
+   Lower-risk than the wall-batching fix above (no shift/sign arithmetic
+   involved at all), and re-verified with the same forced-death hook
+   that the lives display still correctly steps down and invalidates
+   the cache at each of the three loss events.
+
+Verified via Puppeteer throughout: the attract screen (title logo,
+border decoration, Pac-Man/ghost/fruit art, blinking START prompt, all
+pixel-correct before and after every optimization pass), launching into
+a fresh game (fade transition timing, HUD showing 3 lives and a live
+score), movement in all 4 directions with dots visibly being collected
+(score climbing correctly across a real play sequence, confirmed
+multiple times across different builds), the jump gesture, a full
+4-direction continuous-scrolling sweep with no wall-rendering
+corruption, and - via the temporary forced-death debug hook - a
+complete, genuine multi-cycle death/respawn/lives-exhaustion sequence
+ending correctly at the attract screen. Not independently forced this
+session: eating a ghost (the mirror-image `TMN_PLAY_EAT_GUB`/
+`TMN_PLAY_EAT_WAIT` path, structurally identical to the now-verified
+death path and sharing the same fixes) and clearing a full level - worth
+a direct check if anything looks off.
+
+The menu thumbnail was recaptured once all of the above landed (the
+original, added at initial port time, predates the CPU/timing fixes and
+was also taken before `hideOverlay()` existed) - a fresh gameplay
+screenshot (player mid-maze, walls, dots, and the HUD all visible)
+replaced it in the same atlas cell, confirmed via screenshot to still
+render correctly with no cross-contamination of neighboring thumbnails.
+
+**A full line-by-line audit of every ghost-related function against the
+real upstream source, requested directly** ("can you verify with
+upstream if all logic is correct especially concerning ghosts and so"):
+confirmed exact matches for `InitSpk`, `Go2Left/Right/Up/Down`,
+`Trim_Xpos`, `MainAnim`, `GobAnim`, `Move_Ok`, `ReverseGhosts`,
+`CheckDirection`, `TrackPointX/Y`/`TrackDirection` (the chase-vs-scatter
+targeting - tracks the player when `health==0`, tracks the fixed scatter
+point `(7,5)` when frightened), the whole priority-then-random
+direction-selection chain (`SetCtrl`/`FixPriority`/`FixCtrl`/`SetMove`/
+`RandomDirection`/`GhostsDirectionProcess`, including the exact
+priority-3 fallback tie-break order), `ControlUpdate`'s own respawn-point
+health reset, `GhostsUpdate`'s eaten-ghost speed-throttle bypass, and
+`Pac_collision`'s own distance/jump-height thresholds. Also specifically
+re-traced the O(1) ghost-cell-index optimization (the piece most heavily
+rewritten from upstream's own shape) against the original loop and
+re-confirmed it preserves upstream's exact ascending draw order for any
+ghosts sharing a cell. The one confirmed, intentional deviation from a
+literal port - `tmnPacCollision()` processing one eat-or-death event per
+real tick rather than upstream's own single-call multi-eat scan - was
+already documented at the time it was written (see this file's own
+header comment) and re-confirmed still accurate, not a newly-found gap.
+No new bugs found in this pass - a clean audit, not just an absence of
+complaints.
+
+## Blocks Gold - ported from the wider `more games/` search's own findings
+
+Picked directly by the user ("port the next game also about tetris gold
+remember to rename the word tetris") from the 4 candidates staged during
+the earlier wider ATtiny85/TinyJoypad search (see `more games/`'s own
+catalog entry above). Full technical writeup lives in
+`src/games/gameBlocksGold.c`'s own header comment; this section covers
+what happened *after* the initial port, via direct user testing.
+
+**Confirmed, before writing a line of port code, that this is almost
+data-table-for-data-table the same underlying engine as the already-
+shipped Falling Blocks** - both credit Andy Jackson, and extracting every
+data table from both upstream sources and diffing them showed
+`miniBlock`/`blocks`/`blockout`/`ghostout`/`brickLogo` and the attract-
+screen text call-site positions are all byte-for-byte identical between
+the two repos. Reused Falling Blocks' own already-solved rotated-
+rendering technique, bit-grid-to-`bool`-grid conversion (avoiding the
+same shift-arithmetic hazard that game's own header already documents),
+and even its exact derived `gldHappyNotes`/`gldGameOverNotes` sound
+tables (the underlying `beep(30,i)`/`beep(50,i)` loop shapes are
+literally the same lines of code in both upstream sources) rather than
+re-solving already-solved problems. The two genuinely new pieces beyond
+that shared base - a real Tetris-theme melody and two single-shot UI
+beeps - needed their own new sequencer/heuristic work (see the file's own
+header for the exact derivations).
+
+**Trademark-avoidance naming went through two rounds, both at direct user
+request.** Confirmed first that the on-screen word was a plain font-
+rendered string (`ssd1306_char_f8x8(1,64,"TETRIS")`), not baked bitmap
+data, so - same as Falling Blocks - it needed changing in the source, not
+just at the menu-title level. The first shipped version replaced it with
+"GOLD" (to avoid literally duplicating Falling Blocks' own "BLOCKS" word
+on screen) and dropped upstream's own separate "GOLD" splash before a
+normal game starts as now-redundant. A direct follow-up request revised
+this: the main title word is "BLOCKS" after all, with "GOLD" given its
+own dedicated line below "Attiny"/"Arcade" (a blank spacer column
+standing in for a newline) and vertically centered within the same page
+span the other three lines use - preserving the fork's own real brand
+word without duplicating "GOLD" twice on screen or making "BLOCKS" the
+only thing distinguishing the two games' title screens from each other.
+
+**A real, if upstream-original, "how long should a title jingle really
+run" issue, found via direct user report right after the first
+successful playtest** ("the opening music on start game takes a while is
+it playing at normal speed?"). Traced precisely rather than guessed:
+upstream's own `soundPlay(note,duration)` loop increments a real
+microsecond counter by exactly `note*2` per iteration until it reaches
+`duration*1000` - meaning each call genuinely blocks for `duration` real
+milliseconds on actual AVR hardware too, not just in this port. Summing
+every note's own real `duration` value from the 50-pair table gives a
+real ~12.9 seconds (ghost off, the 25-note half-tune) to ~25.8 seconds
+(ghost on, the full 50-note tune) - not a porting artifact, baked
+directly into the original author's own note-duration numbers, and
+confirmed by testing that gameplay genuinely does start correctly once
+the theme finishes (so the state machine itself was never the problem,
+only the wait). When the user pushed back a second time ("I can't
+imagine this taking so long on original hardware or it even blocking the
+start of gameplay"), re-verified the exact same math rather than just
+reasserting it - it holds up: this really does appear to be a genuine,
+likely-unnoticed-by-its-own-author quirk of a solo hobbyist sketch, not
+a mistranscription. **Fixed** with a `GLD_MUSIC_SPEEDUP` (0.3x) constant
+applied only to each note's own real-time duration (pitch/frequency
+untouched) inside `gldAdvanceMusic()` - deliberately *not* the same
+"downsample by skipping notes" technique this project uses for computed
+sweeps elsewhere, since this is a genuine composed melody with a real
+shape worth preserving, not an arbitrary loop; uniformly speeding the
+whole thing up keeps the tune's relative rhythm intact while landing at
+~3.9s/~7.75s, comparable to this project's other title jingles (Tiny
+Pacman's own ~4.4s, for one). Verified via Puppeteer with a generous
+poll: the full (ghost-on) theme now lands gameplay at right around the
+predicted ~7.75s mark, confirmed with a screenshot showing the falling
+piece and next-piece preview already rendering by the 7.5s checkpoint.
+User confirmed by ear afterward ("yes music is better now").
+
+Verified via Puppeteer throughout: the attract screen (border, brick
+logo, "BLOCKS"/"Attiny"/"Arcade"/"GOLD" text all rendering correctly, no
+trace of the trademarked word anywhere), the 2-second hold-gesture
+(correctly toggling the ghost piece off, confirmed via a "GHOST"/"OFF"
+splash), the full music-then-play transition, movement/rotation/soft-
+drop, and an extended soak test (repeated hard-drops with alternating
+left/right nudges to spread pieces across the board) showing a densely-
+packed board with no crashes or rendering corruption, ghost-piece
+outlines rendering correctly around the falling piece, and the next-
+piece preview updating correctly. CPU measured via the perf overlay: 64%
+on the attract screen, 55% during dense gameplay - both comfortably under
+budget with no optimization pass needed, since the per-page composite
+rendering technique (reused from Falling Blocks) was already efficient
+from the start. A genuine line-clear and a full game-over sequence were
+not independently forced to completion this session (the soak test
+densely packed the board but didn't happen to clear a full row) - both
+reuse the exact same `gldClearFullRows()`/`gldBeginGameOver()` logic
+already proven correct in the sibling Falling Blocks port, so risk is
+low, but worth a direct check if anything looks off.
+
+## Astro Barrier - the second port from the wider `more games/` search's findings
+
+Picked directly by the user ("port next game") as the next candidate from
+the same 4-game batch Blocks Gold came from, following this project's own
+earlier assessment that it was the closest hardware match and likely the
+lowest-effort of the four - confirmed true once actually ported. Full
+technical writeup lives in `src/games/gameAstroBarrier.c`'s own header
+comment; this section covers the post-port CPU fix found via direct user
+report.
+
+**A genuinely different, and simpler, rendering model than every other
+AttinyArcade-family game in this project** - confirmed by reading the
+bundled `ssd1306xled-master.zip` source directly rather than assumed:
+`ssd1306_draw_bmp(x0,y0,x1,y1,bitmap)` treats `y0`/`y1` as real PAGE
+indices and streams bitmap data in plain row-major page order - the same
+"one byte = 8 vertical pixels of one column" model this whole project's
+`md_drawColumn()` already handles, with no rotation or bit-shift trickery
+needed at all (unlike Falling Blocks'/Blocks Gold's own sideways-driven
+engine). Text similarly uses the library's own standard, non-rotated
+`ssd1306_string_font6x8()` - confirmed to be the exact same 95-char font
+table already extracted and proven for Oroboros/Run Dude Run/Dino Game,
+reused directly rather than re-extracted.
+
+**One deliberate, documented deviation from a literal port**: upstream's
+own `loop()` has no "press start" gate at all - it shows the title screen
+for a fixed 2-second `delay()` and unconditionally begins level 1 every
+single time, looping forever with no player input required to (re)start.
+Every other game in this cartridge instead waits on its own attract
+screen for an explicit Fire press - added the same gate here for UX
+consistency with the rest of the menu, the only place this port's control
+flow diverges from upstream's literal structure.
+
+**Sound needed a genuinely different derivation than most other ports in
+this project**: `Sound.cpp`'s own `note(n,octave)` is a real ATtiny85
+Timer1 CTC tone generator (David Johnson-Davies' "Tiny Tune" design, not
+a NOP-loop beep), so rather than the usual "no exact real-Hz equivalent"
+heuristic, the exact frequency formula was derived from the register math
+and *numerically verified* against real musical pitches before trusting
+it: `freq = F_CPU / (2^(11-octave) * scale[n%12])` with F_CPU assumed at
+8MHz gives `note(0,4)` = 261.51Hz (essentially exact middle C) and
+`note(9,4)` = 440.14Hz (essentially exact concert-pitch A4) - both
+confirming the 8MHz assumption and the formula itself rather than just
+trusting it on paper.
+
+**A real CPU-load problem, found via direct user report right after
+shipping** ("check for optimizations during certain levels 100% cpu is
+reached (don't test yourself)") - diagnosed and fixed via code inspection
+only, per the user's explicit instruction. `barrRenderFrame()`'s own
+PLAYING branch had the exact same O(pixels x objects) shape this project
+has found and fixed repeatedly elsewhere: `barrBulletByte()`/
+`barrTargetByte()` (the latter called 3 times, once per target) were
+called unconditionally for every one of 1024 pixels/frame, each a full
+function call with its own struct-pointer dereference, even though each
+object only ever occupies a small fraction of the screen - levels with a
+32x32 large target or multiple simultaneous targets would pay this cost
+worst, matching the reported "certain levels" symptom exactly. **Fixed**
+with `barrComposePlayingRow()`, a per-page composite buffer (matching the
+same technique already proven in Falling Blocks/Blocks Gold) writing each
+object - player, bullet, all 3 targets, the bullet-count text - directly
+into a shared row buffer, gated to its own real bounding box (a literal
+duplicate of the old bounds checks the removed `barrSpriteByte()`/
+`barrTargetByte()`/`barrBulletByte()` functions used to perform, not an
+approximation, so it cannot change what renders, only how many times it's
+computed). Verified compiling clean; **not tested in the emulator by
+Claude**, per the user's own explicit instruction - the user independently
+tested it themselves afterward and confirmed it was fine, then separately
+asked to double-check the bullet's own behavior specifically stayed
+identical, which was re-confirmed by tracing both the old and new code's
+exact visibility condition, column range, and sprite-byte lookup formula
+side by side (all three match exactly - see the file's own render
+functions).
+
+Verified via Puppeteer (both before and after the CPU fix, using the
+already-optimized build for the post-fix pass): the attract screen (logo
+art, ship graphic), the level-intro screen ("Level N"/"Nx Bullets" text,
+exact upstream positions), active gameplay (player movement, a bullet
+firing and hitting a target, all 3 target sizes - 8x8/16x16/32x32 -
+rendering correctly across different levels), level completion (correct
+score formula, `bulletsLeft * levelNo`), and an extended soak test
+spanning multiple level transitions and level-wrap-arounds with no
+crashes or rendering corruption. Not independently forced this session:
+a genuine Game Over (running out of bullets) and Game Complete (clearing
+all 17 levels) - both reuse the exact same score/high-score line-building
+and jingle-sequencing code already proven correct for Level Complete/New
+High Score, so risk is low, but worth a direct check if anything looks
+off.
+
+## ATtiny Snake - the third port from the wider `more games/` search's findings
+
+Picked directly by the user ("port the next game") as the third candidate
+from the same 4-game batch, same author/hardware as the already-shipped
+Astro Barrier. Full technical writeup lives in
+`src/games/gameAttinySnake.c`'s own header comment; this section covers
+the highlights.
+
+**The simplest grid model of any port in this project so far**:
+`Display::block(x,y)` treats `x` as a grid column (0-15, 8px each) and
+`y` as a real PAGE index directly (0-7) - every cell maps onto exactly
+one physical page's own 8-column band, with no rotation or bit-shift
+math anywhere, and `filledBlock`/`blankBlock` both being constant bytes
+(only the apple's own `circle` icon has real per-column variation).
+
+**The snake body is a real singly-linked list upstream** (`new`/`free`
+throughout `Snake.cpp`/`SnakeSegment.cpp`) - this dialect has no dynamic
+allocation at all, so it's ported as a fixed-size shift-array instead
+(`asnkBodyX[128]`/`asnkBodyY[128]`/`asnkLen`), the same established
+pattern already used for this project's own Oroboros port. A real
+occupancy grid (`bool[8][16] asnkGrid`) is maintained incrementally
+(O(1) collision test, not O(length)) rather than rescanned from the body
+array every frame - applied proactively from the start, the same lesson
+Astro Barrier's own CPU fix just re-taught.
+
+**Two real design decisions, not literal 1:1 ports**, both explained in
+full in the file's own header comment: (1) a genuine upstream bug in the
+wraparound-edge detection (`xPos-1<0` is always false for a real AVR
+`uint8_t`, so the intended "wrap to the other edge" branch is dead code
+on real hardware) is ported as the clearly-*intended* correct modulo
+wrap instead of either the broken AVR behavior or an unexamined accident
+of this port's own `int`-widening; (2) upstream's own `grow()` causes the
+snake to advance *two* cells in the same tick when eating an apple (an
+apparent unintended consequence of `move()` running unconditionally
+before the eating check, not a deliberate "bonus dash" feature, traced
+through the linked-list mechanics directly) - simplified to the
+standard, universally-expected single-cell-advance Snake mechanic
+instead, matching this project's own already-shipped Oroboros/
+SnakeGame85 conventions.
+
+**Sound reuses Astro Barrier's own already-derived-and-verified Timer1
+CTC frequency formula and even two of its exact jingle tables** (`Sound.cpp`
+is byte-for-byte the same file, same author) - only the 2-note `eating()`
+blip is new.
+
+**Proactively audited for the same CPU-load shape Astro Barrier needed a
+user report to catch**, per a direct user question ("did you optimize
+it?") asked right after this port first shipped - and it turned out the
+question was warranted: the ATTRACT screen's own "S" logo reveal
+animation had exactly the same O(pixels x objects) issue (checking up to
+19 revealed trail cells against every one of 1024 pixels/frame), just
+not yet reported since the game was brand new. Fixed the same way as
+Astro Barrier, proactively rather than waiting for a report: a small
+occupancy grid (`asnkSGrid`, mirroring `asnkGrid`'s own shape) updated
+once per ~100ms reveal-step instead of rescanned per pixel. The SCREEN-
+mode end-game text layers were also row-and-column-gated to their own
+known footprint at the same time, matching this project's own "audit
+every draw layer, not just the obviously large one" lesson.
+
+Verified via Puppeteer: the menu (alphabetical position, credit line),
+the attract screen's own "S" animation revealing correctly and settling
+into the full "SNAKE" logo, starting a game, movement in all 4
+directions (including a wraparound-edge check via the corrected modulo
+wrap), and CPU measured via the perf overlay throughout (20% at rest
+during play, 28-36% during the attract screen's own animation) -
+comfortably under budget both before and after the proactive S-trail
+fix. **Not independently forced this session**: an actual apple-eating
+event and a game-over (self-collision) - the apple's own placement is
+genuinely randomized each game, and blind scripted movement (including a
+full "lawn mower" sweep of the entire 16x8 board) didn't reliably
+demonstrate crossing it within this session's own time budget; the
+eating/growth/collision logic itself is a direct, low-risk structural
+match to this project's own already-proven Oroboros port, so risk is
+low, but this is a real gap worth a direct playtest.
+
+## Meteor Storm - the fourth and last port from this same `more games/` search batch
+
+Picked directly by the user ("port next game") as the fourth and final
+candidate from the same 4-game batch as Blocks Gold/Astro Barrier/ATtiny
+Snake - the one flagged at staging time as needing the most adaptation
+(a non-Arduino toolchain, a custom non-`ssd1306xled` driver, single-
+button hardware). Full technical writeup lives in
+`src/games/gameMeteorStorm.c`'s own header comment; this section covers
+the highlights plus a real rendering bug found well after shipping.
+
+**The toolchain/driver differences turned out not to matter for the
+port itself** - `ssd1306_send_single_data()` still streams one real
+SSD1306 page/column byte at a time (confirmed by reading the driver
+directly), the exact same model `md_drawColumn()` already handles, and
+the game logic in `main.c` is plain, portable C regardless of which
+build system compiles it. No sound of any kind exists in this game
+(confirmed by grep - no buzzer pin, no tone code anywhere) - the first
+port in this whole project needing zero sound work.
+
+**Sub-page, non-page-aligned sprite positioning**: `player_y` and each
+obstacle's own Y are arbitrary pixel values, not page-aligned, so
+`draw_player()`/`draw_obstacles()` both split their own sprite across up
+to 2 physical pages via real bit-shift math. Masked with an explicit
+`& 0xFF` at each shift site, the same byte-truncation fix this whole
+project's history starts with - both Y values are confirmed always
+non-negative before being shifted, so there's no logical-vs-arithmetic-
+shift hazard here (unlike a few other ports in this project).
+
+**A real, two-part rendering bug found via live user play, well after
+this port first shipped and was believed complete** - not caught by any
+of the automated Puppeteer verification at ship time, since it only
+shows up when the player or an obstacle's own sprite crosses the exact
+top/bottom border row or overlaps a different real pixel row than the
+player within the same physical page. Reported as "a black rectangle
+near the bottom" that could "obscure white meteors" and, separately,
+"obscure the outlines of the level" (the top/bottom border line) and
+"the player" (from an obstacle's own lower rows) - initially
+misdiagnosed by this session as "probably just legitimate obstacles
+clustering near the bottom" (a real, expected part of an inverted death
+screen, where every meteor genuinely does turn into a black square) -
+directly and firmly corrected by the user ("it is not a real obstacle
+ffs") before the real cause was found.
+
+Root cause: `metrComposeRow()` originally composited every layer (border,
+player, obstacles, score) with plain assignment (`=`), matching
+upstream's own real "last write wins" SSD1306 page-mode semantics - a
+real hardware write genuinely replaces a whole byte at once. But since
+each layer here only ever occupies a THIN sub-range of a page's 8 real
+pixel rows (the player is 4px tall, an obstacle can be as little as 1px
+tall on a given overflow page), two layers sharing the same (column,
+page) address but occupying genuinely different pixel rows within that
+one byte fully clobbered each other under assignment: the border's own
+single bit (row 0 or row 63) vanished into the middle of a much taller
+player/obstacle rectangle crossing that same column, and an obstacle's
+own overflow-page byte - even though it only really draws a handful of
+that byte's 8 bit-rows - blanked out whatever the player had in the
+*other* rows of that same byte, rows the obstacle was never actually
+drawing to. This is a genuine deviation from upstream's real hardware
+behavior being *desirable* here: the same effect happens on real
+hardware too, but is far less noticeable there (the display inverts
+almost instantly on death, with no way to pause and scrutinize a single
+frame the way this port's held inverted flash screen allows).
+
+**Fixed** by switching every layer in `metrComposeRow()` from assignment
+(`=`) to OR (`|=`), matching the OR-based compositing most other ports
+in this project already use - a general fix for the whole class of
+problem (any future layer combination), not a pairwise patch for just
+"border vs. player" or "player vs. obstacle". The only case this doesn't
+change anything for: two layers that genuinely occupy the exact same
+real pixel (an actual collision) still show as a solid "on" pixel either
+way, OR or replace - only two sprites sharing a byte *without* truly
+overlapping in real screen rows were ever affected.
+
+Diagnosed empirically once static re-derivation of the sprite-mask math
+(checked repeatedly, always found consistent with upstream) failed to
+surface anything - isolated by temporarily disabling obstacle drawing
+entirely and screenshotting the inverted death screen with only the
+player and border visible, which still showed a spurious black square,
+proving obstacles weren't the root cause before the user's own direct
+hints (border overlap; obstacle's own rows "just below" its real visible
+footprint) pinpointed the actual mechanism. Verified after the fix via
+an extended hover-near-the-bottom session with real obstacles live
+(border stayed a continuous, unbroken line at every tap), a real death
+sequence (the inverted flash screen's own black rectangle now sitting
+cleanly on the border with the line still visible), and the perf overlay
+(19-38% CPU, no regression from the `=`-to-`|=` change) - user-confirmed
+fixed ("yup seems fixed now").
+
+Author credit corrected during this same session: the upstream `README`
+only names the GitHub handle `theisolinearchip`, but its own screenshot
+links point at a personal domain (`albertgonzalez.coffee`) suggesting a
+real name - confirmed authoritatively (not just inferred from the URL)
+by checking the repo's own git commit author, which is literally
+`Albert Gonzalez <...@users.noreply.github.com>`. Credited "ALBERT
+GONZALEZ" in the menu accordingly, matching this project's own standing
+preference for a real stated name over a bare handle when one is
+actually available.
+
+Menu thumbnail needed the thumbnails2 atlas to grow a 4th row (3x4=12
+cells was exactly full after ATtiny Snake) - `assets/thumbnails2.png`
+grown from 1024x384 to 1024x512 (still comfortably inside Vircon32's
+1024x1024 texture cap), `THUMBNAIL2_GRID_ROWS`/`THUMBNAIL2_COUNT` bumped
+3->4/12->13 in `portVircon32.c`, matching this project's own established
+grid-growth precedent (Tiny Gilbert, Tiny Dungeon, etc). Verified via
+screenshot that the new thumbnail and "BY ALBERT GONZALEZ" credit render
+correctly, and a spot-checked neighbor (Astro Barrier) is untouched.
+
+## Flappy Bird - a user-supplied folder, not from any of this project's own staged search batches
+
+Ported directly on user request ("in more games\FlappyBird there is a
+flappy bird game now check it out also fetch page from source.txt to
+find author / more info and port it") - the folder was placed straight
+into the repo by the user, not staged/downloaded by this or any prior
+session, and isn't part of the `more games/gametiny`/wider-search
+batches every other recent port in this file came from. Full technical
+writeup lives in `src/games/gameFlappyBird.c`'s own header comment; this
+section covers the highlights plus a real design-quirk bug found via
+direct user play after shipping.
+
+**Author identification needed no web fetch in the end** - `source.txt`
+pointed at the original Instructables writeup, but the `.ino`'s own first
+line already states the author directly ("Created by Alex Wulff:
+www.AlexWulff.com"), which is more authoritative than anything the
+Instructables page itself would add - confirmed no license is stated
+anywhere in the game's own code (only the bundled low-level SSD1306/I2C
+driver libraries carry their own separate BSD/LGPL licenses, and none of
+that driver code was actually ported - see this file's own header
+comment for why).
+
+**The simplest rendering model of any port in this project so far**:
+every upstream draw call (`drawWallSequence()`'s own `oled.drawImage(...,
+column*8, page, 8, 1)`) is exactly one full, page-and-column-aligned 8x8
+grid cell - the whole game logically operates on a 16-column x 8-page
+grid with no sub-pixel/sub-page positioning anywhere at all (unlike
+Meteor Storm's own sub-page sprite math, ported just before this one in
+the same session) - so no byte-truncation/shift-safety concerns applied
+here either. `flpyComposeRow()` just resolves, for each of the 128 real
+columns, which 8x8 grid cell it belongs to and what that cell currently
+shows. Not `tinyJoypadShim`/`obonoCoreShim` lineage - genuine bespoke
+#AttinyArcade-style hardware (two discrete digital-pin buttons read via a
+pin-change interrupt) - needed no new shim, `isUpPressed()`/
+`isDownPressed()`/`arand()` already covered the whole input/RNG surface.
+No sound of any kind exists anywhere in this game (confirmed by grep) -
+the second port in this project needing zero sound work, after Meteor
+Storm.
+
+Upstream's own real accelerating wall-speed formula (`300 -
+10*elapsedSeconds`, floored at 50ms) was ported as a genuine frame-
+counted equivalent rather than approximated with one representative
+rate, since it's a real, deliberate difficulty curve worth preserving.
+Upstream's own explicit render-order comment - "we don't want our bird to
+disappear when a wall goes over it, so it's re-drawn every time there is
+a wall at column 0" - was also preserved structurally: `flpyComposeRow()`
+always resolves the bird's own cell last, unconditionally overwriting
+whatever a wall byte computed for that exact position, the same real
+design intent achieved via a full every-frame redraw instead of
+upstream's own incremental one-cell overwrite (avoiding the VRAM-
+persistence bug class proactively, per this project's own now-standing
+practice, rather than needing a later fix). Upstream's own `gameOver()`
+loops forever with no restart short of a hard power cycle - added a
+genuine attract screen (upstream has none at all) and a Fire-to-restart
+gesture on the game-over screen, matching the UX convention already
+established for every other recent port in this file.
+
+**A real, genuine gameplay bug found via direct user report right after
+shipping** ("on certain occasions / certain walls / player positions the
+bird can fly through walls without gameover happening"). Investigated
+methodically rather than guessing: three separate deterministic tests
+(a debug build with the bird pinned at a fixed unsafe row against a
+forced wall-hole value, covering both boundary hole positions 0 and 6
+plus a middle value of 3) all correctly triggered a game over, ruling out
+a broken collision formula. An extended stress test with real random
+hole positions and erratic real button-driven movement also died
+correctly across multiple rounds, ruling out a general "collision never
+fires" bug. This pointed at something conditional rather than a plain
+formula error - re-reading `flpyMoveWallsStep()`'s own ported grace-
+period gate line by line surfaced it: upstream's own `moveWalls()` gates
+every single collision check behind `millis() > 8000L`, a genuine 8-
+second immunity window every fresh game starts with, during which
+**no** wall reaching column 0 can ever trigger a collision, regardless of
+the bird's position - ported faithfully at first (matching this
+project's own default "preserve upstream behavior" stance), but this
+reads as a real bug rather than a deliberate mercy window once actually
+played: walls start scrolling in almost immediately at the start of a
+game, so several of them can reach column 0 completely "for free" inside
+that first 8 seconds - very easy to misread as broken collision
+detection, especially phrased as "on certain occasions" (in practice:
+every single fresh game, for its own first several walls) rather than
+"in the first 8 seconds of a new game." Confirmed by testing a debug
+build with a shortened 1-second grace period (worked correctly) against
+the real 8-second one (an obviously-unsafe pinned wall/bird combo
+sailing through with no game over for the whole window) side by side,
+which the user confirmed matched what they'd been seeing. **Fixed** by
+removing the grace-period gate entirely, at direct user request ("remove
+that grace period") - re-verified with the same pinned-bird debug
+scenario dying correctly on the very first unsafe wall (~4.2s in, no
+longer waiting out a free 8-second window first).
+
+Verified via Puppeteer throughout: the attract screen (bird/wall art,
+title, credit line, "PRESS FIRE" prompt), active gameplay (up/down
+stepping, wall scrolling, gap navigation, the accelerating speed curve),
+the game-over skull screen, and - via the debug pinned-bird scenario used
+to find and verify the grace-period fix - the corrected immediate-death
+behavior. CPU measured via the perf overlay: 26% during active gameplay,
+comfortably under budget with no optimization pass needed given the
+simple grid-aligned rendering model. Menu thumbnail added to
+`assets/thumbnails2.png`'s cell 13 (row 3, col 1 of its 4x4 grid, still
+with 2 free cells remaining) - no atlas growth needed. Verified via
+screenshot that it displays correctly with "BY ALEX WULFF" underneath,
+and a spot-checked neighbor (Falling Blocks) is untouched.
+
+## Tiny Bulls And Cows - the first port from the "very very deep scan" batch
+
+Picked as the lowest-effort of the 4 surviving candidates from the deep-
+scan feasibility audit (native 128x64, 3 plain digital buttons, no C++
+classes/switch/float anywhere in the source). Full technical writeup
+lives in `src/games/gameTinyBullsAndCows.c`'s own header comment; this
+section covers the highlights.
+
+A Mastermind-style number-guessing game: guess a hidden 4-digit code
+(0-9, repeats allowed), each guess scored in "bulls" (right digit, right
+position) and "cows" (right digit, wrong position), up to 10 guesses to
+find it. Not `tinyJoypadShim`/`obonoCoreShim` lineage - built on the
+`Tiny4kOLED` Arduino library (the same library ATtiny Tetromino also
+uses) with 3 discrete digital-pin buttons - needed no new shim,
+`isUpPressed()`/`isDownPressed()`/`isFirePressed()`/`arand()` already
+cover the whole input/RNG surface. No sound anywhere in this game.
+
+**Upstream's own input model is a held-repeat, not a single-shot edge**:
+the select button's own press/release edge is tracked every real tick,
+but the actual application of *any* input (including a held Up/Down
+repeatedly nudging a digit or the cursor) is gated behind a shared
+`millis()`-based 200ms cooldown - a held button repeats roughly 5x/second,
+not once per press. Ported as a frame-counted equivalent
+(`tbcInputCooldown`, 12 frames @ 60fps = 200ms) rather than collapsed
+into a plain single-press edge check, since the repeat-rate behavior is a
+real, deliberate part of how this UI feels to navigate a 10-row history
+list plus 4 digit slots.
+
+**A genuinely quirky, deliberately-preserved-not-"fixed" upstream
+behavior**: a fresh, never-yet-entered digit slot holds sentinel value 10
+("blank"). Upstream's own digit-edit logic coerces this to a local 0
+*before* applying the Up/Down delta - so the very first Up press on a
+blank slot jumps straight to "1" (0 coerced, then incremented), while the
+very first Down press does *nothing at all* (0 coerced locally, `0 > 0`
+is false, so the write branch never runs and the slot stays blank).
+Ported with the exact same two-step coerce-then-conditionally-write
+logic, not "corrected" into a symmetric wrap.
+
+**Rendering is a dense, precisely-interleaved multi-region layout**,
+confirmed non-overlapping column-by-column before porting rather than
+assumed: a 10-entry guess-history strip (columns 0-60, pages 0-3, 6
+columns per entry - 5 data + 1 connector-line byte forming a vertical
+timeline linking consecutive rows), a 7-column "hidden/revealed answer
+squares" indicator (columns 63-69), 4 large 8x16-font answer/guess digits
+interleaved with 5 small 5-column cursor-arrow indicator slots (columns
+71-127, pages 0-1 - confirmed via exact column math that neither region's
+bytes ever land on the same column as the other), and a 2-line text
+menu/status area (columns 72+, pages 2-3). Composited with OR (`|=`)
+throughout as a defensive default (matching this project's own
+established lesson from Meteor Storm's border bug) even though the
+column math confirms these regions don't actually overlap. Confirmed via
+direct reading that gameplay never touches pages 4-7 at all (the whole UI
+fits in the top half of the display) - explicitly redraws those pages
+blank every frame anyway rather than skipping them, avoiding the VRAM-
+persistence bug class proactively (upstream's own splash screen *does*
+use all 8 pages, which would otherwise leak residual pixels into the
+unused bottom half once gameplay starts).
+
+Upstream's own digit-packing math (`(b2 << 6)`, `(b3 >> 4) | (b4 << 2)`,
+etc - fitting two 5-row-tall 3-column glyphs' bits into shared bytes)
+relies on AVR's implicit `uint8_t` truncation to stay within a real byte
+- fixed the same way as every prior instance of this project's own
+first-documented bug class: explicit `& 0xFF` masks at each shift site.
+
+**A real dialect violation caught before ever building, not by a compile
+error**: an early draft of this port used the ternary operator
+extensively (over a dozen sites, mostly in the dense per-page byte-
+selection logic) - this dialect has no ternary support, a restriction
+already well-documented elsewhere in this project but easy to slip past
+when translating a source file that itself leans on it heavily for
+compact byte-selection expressions. Caught via a project-wide grep for
+`?` before the first build attempt and rewritten as explicit `if`/`else`
+assignment throughout - the file compiled clean on the very first real
+build attempt afterward.
+
+`digits[]` (10 digits x 3 bytes, the small in-game font) was byte-diff-
+verified against upstream's own table; the large 8x16 answer-digit font
+isn't part of this game's own source at all - it's `FONT8X16DIGITS`,
+pulled in from the separate `Tiny4kOLED` library upstream depends on
+(`datacute/Tiny4kOLED`, `src/font8x16digits.h`) - fetched and byte-diff-
+verified directly from that library's own real source rather than
+approximated with an already-available smaller font.
+
+The splash screen's own real hardware scroll animation
+(`scrollLeftOffset`/`activateScroll`, purely decorative) was not
+reproduced - shown as a plain static instructions screen instead,
+matching this project's own precedent of not chasing cosmetic real-
+hardware animation tricks with no bearing on gameplay.
+
+Verified via a light sanity pass, not an extensive playthrough (per
+direct user instruction to keep per-port self-testing minimal going
+forward): the menu registration, the attract screen (title/instructions/
+credit/press-fire prompt), and one gameplay screenshot confirming the
+history strip, answer-squares indicator, cursor bracket, big digits, and
+menu text all render correctly together. CPU was not separately measured
+for this port. Menu thumbnail added to `assets/thumbnails2.png`'s cell 14
+(row 3, col 2 of its 4x4 grid, 1 free cell remaining) - not independently
+re-verified via screenshot after adding, matching the same lighter-
+verification approach.
+
+## ATtiny Tetromino - the second port from the "very very deep scan" batch
+
+Full technical writeup lives in `src/games/gameAttinyTetromino.c`'s own
+header comment; this section covers the highlights.
+
+An enhanced falling-block puzzle game (Franco Trimboli, GitHub
+`sunpazed`, GPLv3), built directly on `jfoucher/attiny-tetris` (Jonathan
+Foucher's own minimal base, no license stated) - a 7-bag randomiser, an
+NES-matched level speed curve, a lines/levels counter, and a restart
+gesture were all added on top by sunpazed's own fork. Confirmed via
+direct source reading (per the feasibility audit's own "check if it
+extends an existing port already" discipline) to share zero code/data
+with Andy Jackson's own TinyTetris lineage already shipped twice in this
+project (Falling Blocks, Blocks Gold) - built on the `Tiny4kOLED` Arduino
+library instead, with its own from-scratch board representation and font.
+
+**Confirmed via direct source reading that this targets a genuine 128x32
+display, not 128x64** - placed within Vircon32's fixed 128x64 canvas the
+same way Tiny Bulls And Cows' own top-half-only UI was handled (gameplay
+only touches pages 0-3, with pages 4-7 explicitly redrawn blank every
+frame to avoid the VRAM-persistence bug class).
+
+**The board is genuinely rendered rotated 90 degrees from a normal top-
+down Tetris view** - traced the exact byte layout (not assumed) and
+confirmed the board's own Y axis (gravity) maps to real screen *columns*,
+while its own X axis (native Left/Right movement) maps to real screen
+*pages*. On an unrotated Vircon32 screen, a piece falls left-to-right,
+and upstream's own Left/Right buttons visually move a piece up/down, not
+left/right. **Controls were deliberately remapped to match what the
+player actually sees** rather than upstream's literal button wiring -
+confirmed directly with the user first, since this is a genuine UX
+judgment call with no single obviously-correct answer (unlike Falling
+Blocks/Blocks Gold, whose own native wiring happened to already feel
+natural post-port, so was left untouched - this game's didn't, so it
+wasn't). Up/Down move the piece, Fire rotates (with upstream's own wall-
+kick logic preserved exactly), Left/Right both soft-drop.
+
+**A real AVR-specific software-reset trick, not portable at all**:
+upstream's own `void(*resetFunc)(void)=0; resetFunc();` is a classic AVR
+null-function-pointer jump to the reset vector - ported as a normal
+state-machine transition back to the attract screen instead, since a
+null-pointer call has no meaningful Vircon32 equivalent and would simply
+crash.
+
+**A diagonally-shifted, dual-digit-per-page number rendering
+technique**, used for the score/high-score/level+lines displays: each of
+the 4 hardware pages shows a *blend* of two adjacent decimal digits, bit-
+shifted by different amounts per page and OR-combined. Traced the exact
+divisor-stepping logic (including a deliberate double-step quirk at page
+1 that intentionally skips one digit's own "primary" page slot) and
+ported it verbatim rather than reimplementing a more conventional digit
+layout, since the real visual result depends on this exact bit-
+interleaving scheme - the intermediate shift values can exceed a real
+byte's own width before the final `& 0xff` mask, which upstream already
+had at the same site (its own intermediate values are AVR's real 16-bit
+`int`s, not `uint8_t`) - kept the identical mask rather than needing an
+additional one.
+
+Binary literals (two small decorative label bitmaps) were converted to
+hex, matching this dialect's lack of `0b` support - byte-diff-verified
+against upstream via a Python script, along with every other data table
+in the file (piece shapes, digit font, shift table), all confirmed
+correct on the first attempt. Upstream's own bit-packed board (1 bit per
+cell) was ported as a plain `bool[16][24]` grid instead, matching Falling
+Blocks' own identical precedent (bit-packing has no benefit on Vircon32
+and avoids the whole shift-arithmetic hazard class). `struct
+activePiece`'s own C++ pointer-reassignment pattern (`active.piece`
+pointed at whichever of several buffers was currently relevant) was
+replaced with one persistent, in-place-mutated array instead, avoiding an
+unproven pattern for a purely internal implementation detail.
+
+**A real dialect violation caught before ever building**, matching the
+exact same lesson from Tiny Bulls And Cows' own port immediately before
+this one in the same session: an early draft leaned on the ternary
+operator in a few of the dense byte-selection sites - caught via a grep
+for `?` before the first build attempt, none reached an actual compile
+error.
+
+**A genuine "does upstream actually gate this" question, answered by
+re-reading the source rather than guessed**, from a direct user report
+right after shipping ("if i keep pressing down and a block hits the
+bottom the next block quickly advanced already into play was there a
+gatekeep upstream?"): confirmed there is no delay between a piece locking
+and its replacement becoming controllable in upstream's own code either -
+the next piece is spawned and made active within the same tick, on real
+hardware only gated by however fast the bare loop naturally runs (the
+same "no timing model whatsoever upstream" category several other ports
+in this project already fall into). Not a porting bug - added a
+`TRMO_TICK_DIVISOR=2` (30fps) whole-tick throttle at direct user request
+anyway, purely to make that already-instant transition feel less abrupt,
+matching the majority "gate the whole tick, not just movement" precedent
+in this project. Every existing frame-counted constant in the file was
+deliberately left unrescaled, so they simply now take twice as long in
+real time.
+
+Verified via a light sanity pass (menu registration, attract screen,
+gameplay screenshot showing the board/next-piece preview/level+lines/
+score all rendering correctly together) per the same lighter per-port
+verification approach now standard for this project. CPU measured at
+43% during active gameplay before the 30fps throttle was added -
+comfortably under budget, no optimization pass needed. Menu thumbnail
+added to `assets/thumbnails2.png`'s cell 15 - the last free cell in that
+atlas's 4x4 grid, now completely full; the next new game's own thumbnail
+will need either a further grid-growth or a third texture, matching this
+project's own established precedent for when an atlas fills up.
+
+## Laser Pong - the third port from the "very very deep scan" batch
+
+From `more games/ATTiny85_Pong/` (Winston-Lu, MIT). An enhanced Pong: a
+cooldown-gated deflecting "shoot" projectile, a speed-burst "spike"
+ability, and adjustable AI difficulty on top of the classic 2-paddle
+formula. Menu title "LASER PONG" (not the repo's own name,
+`ATTiny85_Pong`) - taken directly from the game's own in-game title
+screen text (`showTitle()`), and chosen specifically to avoid a `pong`
+prefix collision with this project's already-shipped `gamePong.c` (Bat
+Bonanza, a different, unrelated Pong clone) - this port uses `lpg`
+throughout instead. Full technical writeup (button-mapping derivation,
+sub-page sprite compositing, the faithfully-preserved `SPIKESPEED/10`
+integer-truncation bug, the README-vs-code control-mapping discrepancy)
+lives in `src/games/gameLaserPong.c`'s own header comment; this section
+covers the porting-process highlights.
+
+Not `tinyJoypadShim`/`obonoCoreShim` lineage - genuine bespoke hardware
+(an external `ssd1306.h`/`SPRITE` library dependency, not itself needed
+here since this port composites columns directly the same way every
+other game in this project does) reading a single-analog-pin voltage
+ladder decoding up to 4 simultaneous directions. Needed no new shim at
+all: every one of upstream's 9 non-zero ladder bands turns out to be
+some combination of exactly 4 independent booleans, so
+`isUpPressed()`/`isDownPressed()`/`isLeftPressed()`/`isRightPressed()`
+checked independently reproduce every band case exactly, with
+`isFirePressed()` used only for the attract-screen "press to start"
+gesture (unused by native gameplay), matching this project's own
+standing convention. Confirmed via direct source reading
+(`#define HEIGHT 32`) that this targets a genuine 128x32 display -
+placed within Vircon32's fixed 128x64 canvas the same way ATtiny
+Tetromino/Tiny Bulls And Cows were, with pages 4-7 explicitly redrawn
+blank every frame to avoid the VRAM-persistence bug class.
+
+**A real, self-found control-flow bug, caught by the user's own direct
+question rather than a symptom report** ("was lpgMoveBall() called twice
+upstream as well?"): an early draft called `lpgMoveBall()` once directly
+in the state machine's PLAYING branch and a second time from inside what
+was then a combined `lpgUpdatePlaying()` helper - re-checking the real
+upstream source confirmed `moveBall()` is called exactly once per loop
+iteration, at the very top, with the code's own comment explaining why
+("move ball first to avoid pixel overlap bugs with ball size <8"). Fixed
+by renaming that helper to `lpgUpdateInputAndAI()`, removing its internal
+`lpgMoveBall()` call, and restructuring `gameLaserPong_update()`'s
+PLAYING branch to match upstream's real per-tick order exactly: move
+ball -> win-check (using the post-move score) -> if scored, begin the
+score pause and return -> otherwise read input/run AI -> render. The same
+re-read also confirmed `lpgMoveBall()`'s own "ball hit the side, reset
+round" block is a genuinely SEPARATE `if` statement from the paddle-
+bounce/wall-bounce/move logic that follows it (not `if`/`else`) -
+preserved exactly, meaning even on the tick a point is scored, the
+freshly-reset ball still takes one small extra step that same frame,
+matching upstream's real structure rather than the more "obviously
+correct"-looking `if`/`else` shape an early draft had used instead.
+
+Every sprite (paddle/ball/laser) is composited through one shared
+sub-page byte-split helper (`lpgSpriteColByte()`), the same explicit-
+shift-and-mask technique already proven for Meteor Storm/Run Dude Run's
+own sub-page sprite math - built in from the start rather than needing a
+later CPU-load retrofit, per this project's own "check for optimizations
+in each port" standing instruction. The ball's own 8-column bitmap
+(`lpgBallCol[]`) renders as a genuine small heart shape - confirmed, when
+the user asked directly, to be faithful to upstream's own real bitmap
+data (verified via byte-diffing the extracted table against upstream's
+literal binary constants and rendering it as ASCII art), not a porting
+artifact.
+
+**MAX_GAMES silently dropped this game from the menu entirely** - the
+exact same bug class already documented once for Dino Game (32->48).
+Laser Pong is the 49th `addGame()` call, one past the 48-cap set at that
+time; confirmed via `grep -c "addGame("` (49) against `MAX_GAMES` (48),
+fixed by bumping the cap to 64 this time, specifically to leave more
+headroom against a third repeat of the same mistake. **The thumbnail
+atlas needed a genuinely new, third texture**, not just another grid
+cell - `thumbnails2.png` was already completely full (16/16 cells, see
+ATtiny Tetromino's own writeup above) going into this port. Created
+`assets/thumbnails3.png` (a 4x2, 8-cell grid, matching the same
+established pattern from when `thumbnails2.png` itself was first
+created) and wired it through as a genuine 5th cartridge texture id
+(`THUMBNAILS3_TEXTURE_ID`, appended to the end of `rom.xml`'s own
+`<textures>` list - specifically *after* `pixelgrid.vtex`, not before
+it, so `PIXELGRID_TEXTURE_ID` keeps its existing numeric id rather than
+being silently renumbered), `Make.sh`/`Make.bat`'s own PNG-conversion
+step, and a third dispatch range in `md_getThumbnailCount()`/
+`md_drawGameThumbnail()` (`src/portVircon32.c`). Verified via screenshot
+that Laser Pong's own thumbnail (heart-shaped ball, both paddles, live
+score, "BY WINSTON LU" credit) renders correctly and a spot-checked
+neighbor (Meteor Storm, sharing no texture with the new one) is
+untouched.
+
+Verified via a light sanity pass (menu registration on page 2, attract
+screen, and an active-gameplay screenshot showing both paddles, the
+heart-shaped ball, and the live "N:M" score all rendering correctly
+together) per this project's now-standard lighter per-port verification
+approach. CPU measured at 28% during active gameplay via the perf
+overlay - comfortably under budget, no optimization pass needed.
+
+## Pipe Bird - the last candidate from the "very very deep scan" batch
+
+From `more games/attiny85-flappy-bird/` (Ioannis Lampropoulos, GitHub
+`Lampropoulosss` - the repo's own commit author, since no name is stated
+anywhere in the source or in a README/LICENSE file). This was the one
+remaining staged candidate flagged since the deep-scan batch's own initial
+triage as needing "a final side-by-side mechanic check against the
+already-shipped Flappy Bird" before porting - confirmed via direct source
+reading to be genuinely different, not a duplicate: a true continuous-
+position pipe-gap flyer with real gravity/velocity physics and a hold-
+any-button-to-flap gesture, much closer to the original mobile game's own
+feel, versus the already-shipped port's discrete one-row-per-press
+stepping avoider with no gravity at all. Menu title "PIPE BIRD" (not
+"FLAPPY BIRD 2" or similar), picked via a direct AskUserQuestion to the
+user specifically to avoid colliding with the already-shipped game's own
+menu title, since the repo itself has no title screen/branding of its own
+to draw a name from.
+
+A plain AVR-GCC/Makefile project (not an Arduino `.ino` sketch) with its
+own minimal, from-scratch SSD1306 driver - the same toolchain shape
+already proven portable for Meteor Storm. `oled_show_page(page,
+buffer[128])` streams one full 128-byte page at a time, the same "one
+byte per (column, page)" model `md_drawColumn()` already handles, so no
+new shim primitives were needed. Not `tinyJoypadShim`/`obonoCoreShim`
+lineage - a single-analog-pin voltage ladder decoding 4 discrete buttons
+with no separate Fire pin at all. Upstream's own flap gesture is "ANY of
+the 4 buttons, newly pressed" - ported as an edge-detected OR of
+`isUpPressed()`/`isDownPressed()`/`isLeftPressed()`/`isRightPressed()`,
+faithfully reproducing "any button flaps" rather than picking one
+arbitrary direction; `isFirePressed()` (unused by native gameplay, since
+this hardware has no such button) is used only for this port's own added
+attract-screen/game-over-to-attract gestures, matching every other
+beyond-scope port's own standing convention of adding a genuine attract
+screen where upstream has none at all.
+
+**Two real bugs found and fixed proactively, before ever compiling,
+extending this project's own "AVR-implicit-narrow-type-reliance" bug
+family with a new mechanism**: `pipe_x` is `uint16_t` upstream, and its
+own reset check (`if (pipe_x > 128<<2) { pipe_x = 128<<2; score++; ...
+}`) relies on real unsigned hardware wraparound-on-decrement to detect
+"the pipe just went past the left edge" - `avrCompat.h` aliases
+`uint16_t` to a plain, non-wrapping 32-bit `int`, so a negative
+`pipbPipeX` would just stay negative forever instead of wrapping back
+above the 512 threshold, permanently freezing the pipe off-screen and
+halting scoring entirely. **Fixed** by replacing the wraparound-reliant
+`> 512` check with a direct `< 0` sign check instead - mathematically
+equivalent to "the moment the pipe's real position would go negative"
+without depending on unsigned overflow to detect it. A smaller instance
+of the same family: `prng_state` is `uint8_t` upstream (a classic 8-bit
+LCG relying on wraparound to stay bounded), fixed with an explicit
+`& 0xFF` mask after each update; the real-hardware-timer entropy
+injection on flap (`prng_state ^= TCNT0;`, no Vircon32 equivalent) was
+replaced with `arand(256)`, the same "swap a hardware-timer-register
+entropy source for the shared RNG" treatment already used elsewhere in
+this project.
+
+**A third bug, the same logical-vs-arithmetic-right-shift hazard already
+found in HollowSeeker/Tiny Pipe/TinY Fi**, also caught by inspection
+before compiling: `bird_y` can go genuinely negative for exactly the one
+frame a ceiling collision is detected, and `(bird_y >> 4) < 0` would
+silently fail to register that collision under Vircon32's documented
+*logical* (not arithmetic) `>>`. **Fixed** by testing `pipbBirdY < 0`
+directly instead of shifting first - mathematically equivalent for a
+pure sign check, avoiding the shift-semantics question entirely for this
+one comparison. Confirmed this is the only site where a negative
+`bird_y` can ever reach a shift - rendering never sees a negative
+`bird_y` at all, since the ceiling check ends the game the same tick,
+before the next render call.
+
+Upstream's own sub-page bird-sprite compositing already explicitly widens
+each 16-bit sprite column into a 32-bit temporary before shifting, with
+an explicit `& 0xFF` mask on each of the 3 possible output bytes - the
+same byte-truncation-avoidance technique this project's own history
+established as necessary, just already present in the *original* AVR
+source this time rather than something this port needed to add. `tiny_font`/
+`bird_bitmap` were byte-diff-verified against upstream via a small Python
+script before ever being pasted in; the standard 95-char `ssd1306xled`
+font (already proven for Oroboros/Run Dude Run/Dino Game/Astro Barrier/
+ATtiny Snake/Flappy Bird) was reused for this port's own added attract
+screen, since upstream's own tiny 5-column font only covers digits plus
+the specific letters its own "GAME OVER"/"SCORE"/"HIGH" screen needs -
+that screen itself was ported as a direct 1:1 translation of upstream's
+own `render_frame()` game-over branch, unchanged in structure. EEPROM
+high-score persistence dropped (session-in-memory only), matching every
+other port's precedent.
+
+**A genuine hardware-timer-driven ~30fps, not the "no timing model
+whatsoever upstream" category this port was initially (incorrectly)
+assumed to fall into** - found via a direct user request right after
+shipping ("limit game to 30 fps"), which prompted re-checking
+`main.c`'s own `ISR(TIMER0_OVF_vect)` more carefully: it's explicitly
+commented "automatically triggered ~30 times a second by the hardware",
+gating every real `update_physics()`/`render_frame()` call to that
+genuine rate - unlike the several other beyond-scope ports in this
+project whose own upstream truly has no timing model at all. Shipping
+this port at the engine's native 60fps ran gravity/velocity/pipe-speed
+exactly 2x faster than the original hardware - a real miss at initial
+port time, not caught proactively. **Fixed** with `PIPB_TICK_DIVISOR=2`,
+a whole-function tick-skip gating the entire `gamePipeBird_update()` body
+(including the attract/game-over screens, matching the majority "gate
+the whole tick" precedent in this project) rather than a movement-only
+split, since there were no pre-existing 60fps-tuned wait constants in
+this port that needed to stay unrescaled.
+
+Verified via a light sanity pass (menu registration on page 3, attract
+screen, and a genuine mid-flight gameplay screenshot showing the bird
+sprite and an oncoming pipe both rendering correctly) per this project's
+now-standard lighter per-port verification approach - two earlier
+gameplay captures during this same verification pass showed the GAME
+OVER screen instead of mid-air flight, which read as suspicious at first
+but traced back (via code inspection, not further testing) to the test
+script's own timing rather than a real bug: with zero or with rapid,
+unmoderated flap input, the real ported physics genuinely crash the bird
+into the floor or ceiling well within a second, exactly matching
+upstream's own real difficulty - not a porting defect. The GAME OVER
+screen itself was independently confirmed correctly rendered by both of
+those captures regardless. Menu thumbnail added to `assets/thumbnails3.png`'s
+cell 1 (second cell of its 4x2 grid, right after Laser Pong's own cell 0)
+- no atlas growth needed. This closes out the "very very deep scan"
+discovery batch entirely - all 4 staged candidates (Tiny Bulls And Cows,
+ATtiny Tetromino, Laser Pong, Pipe Bird) have now shipped.
+
+## Nohzdyve - the first port from `more games/MEGAcompilation_ESP/`
+
+Picked directly by the user ("trying porting the dyve one") as the first
+of the 3 games staged from Daniel C's ESP8285/ESP8266 "MEGA TinyJoypad"
+compilation (see this file's own "beyond the original scope" entry above
+for how that compilation was found and why it changed the earlier
+"out of scope, beefier Arduboy hardware" call on these 3 titles). A
+vertical dive/descent game - steer left/right while diving down an
+endlessly-scrolling shaft, dodging wall-mounted climbing pegs and
+carnivorous flowers plus a chasing "jaw" enemy, while touching a
+bouncing "glob" target scores +10 points; 3 lives per game. The name and
+"© TUCKERSOFT" branding on its own real title screen are a direct homage
+to the fictional in-universe game from Netflix's *Black Mirror:
+Bandersnatch* (2018), "developed" by the fictional Tuckersoft studio in
+that film.
+
+**Confirmed genuinely portable in the earlier audit, and it held up**:
+plain C-style top-level file (`Nohzdyve-ESP.h`), with classes confined to
+the supporting `engineOBJ.h` (`TUNES`/`TIMERND`/`Sprite_ND`, no
+inheritance) - flattened to `NdvSprite`/`NdvTimer` structs + `ndv`-
+prefixed functions, the same treatment already proven for every other
+class-based Daniel-C/Sven-B port in this project. `TUNES::tone()` turned
+out not to be a real Arduboy dependency at all - it's a thin wrapper
+around `Sound_TTRICK()`, which (traced through the full un-staged
+compilation) is a byte-for-byte copy of the same `255-freq` bit-bang
+tone formula `ELECTROLIB.h`'s own `Sound()` already uses - ported as a
+direct call to the shared `Sound()`. Every one of upstream's own
+`tunes.tone()` calls is already individually gated by its own `TIMERND`
+trigger (one real tick apart at minimum), so - unlike the burst-collapse
+bug family found in several other Daniel-C ports - there was no risk of
+multiple `Sound()` calls colliding into one audible tone here; none
+needed a sequencer.
+
+**A genuinely different sprite-table height convention from this
+project's own established `blitzSprite` family** - the single most
+important structural finding of this port, caught by hand-verifying the
+math against real extracted byte counts (e.g. `StartGameND`'s own
+declared header "43,5" only makes sense as 43 wide x 5 *raw pixels* tall,
+not 5 pages) rather than assumed identical to Tiny Bert's own already-
+proven `bertBlitzSprite`. Every other `blitzSprite`-family port in this
+project (Tiny Bert, Tiny Doc, Jump Slime, etc) has upstream tables
+storing *page count* directly at index 1, needing no conversion. This
+ESP-compilation's own tables instead store *raw pixel height*, with the
+real page count computed by the caller as `(height>>3) + (1 if height%8
+else 0)` - a genuine partial-page-rounding case none of this project's
+existing sprite tables needed. `ndvBlitzSprite()` is therefore a fresh,
+direct translation of ESPKIT.h's own `ESP_blitzSprite()`/
+`ESP_RecupeLineY()`/`ESP_RecupeDecalageY()`, not a reuse of
+`bertBlitzSprite()` - reusing the existing helper unchanged on this
+game's own data would have silently mis-sized every sprite.
+
+**Three different compositing modes were needed simultaneously for the
+first time in this project** - previous ports have almost always used
+plain OR. Sprites and side walls use OR (`drawSelfMasked` upstream); the
+*entire* HUD (score/lives labels and digits) uses XOR (`drawInvertPixel`
+- upstream's own "stays visible regardless of background" trick, safe to
+apply in any order since XOR accumulation is commutative); the attract
+screen's fade-out uses AND-NOT against a growing dither mask
+(`drawErase`); a one-off bonus screen (dropped, see below) would have
+needed a background-clear-then-stamp (`drawOverwrite`).
+
+**The splash/attract intro was deliberately simplified**, the same
+"effort/fidelity tradeoff for a purely decorative, non-gameplay sequence"
+precedent already used elsewhere (e.g. Space Attack's own simplified
+attract slide-in) - upstream's real sequence is a 10-step animated
+crossfade between 5 full-screen pictures, a 50-iteration loading-flicker
+with a beep each, a 65-frame "choose your handedness" screen, and an
+optional bonus "video code" screen, collapsed here to a plain sequential
+hold of the same 4 splash pictures. The "choose your handedness" screen
+specifically was dropped outright rather than simplified, for a reason
+stronger than effort: reading `SelectND()` directly confirms the chosen
+value is a local variable only ever used to decide whether to show the
+bonus video-code screen afterward - it has zero actual gameplay effect
+even on real hardware, so there was nothing to preserve. Real gameplay
+(`PlayGameND`) and the per-life window-opening reveal (`ExitWindowND`,
+which slides open to show the real "NOHZDYVE / TUCKERSOFT" title card
+before every life) are both ported at full fidelity.
+
+**A genuinely new dialect finding for this project**: an anonymous
+`enum { ... };` (matching upstream's own bare-enum style exactly)
+compiled with `error: expected identifier` - this dialect requires a
+named `enum TypeName { ... };`, confirmed against `VIRCON32_C_DIALECT.md`
+§17.1's own documented rejection of anonymous `typedef enum`. Only 3
+already-shipped games in this whole project (NumberPlace/2048/
+HollowSeeker) had ever used a real `enum` before this one, and all 3
+happened to already use the named form - this port is the first to hit
+the anonymous-enum rejection directly. Fixed by naming all 3 enums
+(`NdvSpriteSlot`/`NdvPicId`/`NdvState`).
+
+**Declaration-order note, not a bug**: `VIRCON32_C_DIALECT.md` §11
+confirms forward declarations *are* actually supported ("allowed for
+ordering") - contrary to this file's own earlier, overly-broad "no
+forward declarations" framing from the HollowSeeker-era work. This port
+still used the more conservative option (physically relocating the 3
+mutually-cross-called "begin state" functions - `ndvBeginAttract`/
+`ndvBeginWindowOpen`/`ndvBeginPlaying` - to a shared block ahead of every
+caller, confirmed via `gameTinyPipe.c`'s own already-shipped forward-
+declaration usage that either approach would have worked) rather than
+rely on forward declarations, since the physical-reorder option is
+strictly safer and was already most of the way done.
+
+**A real bug found via a direct user report right after shipping**
+("the walls on the side get removed too early from the top and in the
+beginning of the gameplay walls are not being drawn as well near top").
+Diagnosed by tracing the exact mechanism rather than guessing: `ndvYScroll`
+(driving the side walls' own scroll position) goes negative almost
+immediately once gameplay starts (`ndvScrollDown(1)` decrements it every
+single real tick while playing), and `ndvRecupeLineY( int valeur ){
+return valeur >> 3; }` - a plain, unguarded right shift - is exactly the
+same "logical vs arithmetic shift" bug class already found and fixed
+multiple times in this project (HollowSeeker's `hsDivByColumnW`, Tiny
+Pipe's `RecupeLineY`, TinY Fi's own proactive fix): Vircon32's `>>` is a
+documented *logical* (zero-fill) shift, so a negative `yPos` produced
+garbage instead of the correct negative floor-division result, corrupting
+the wall's own page-visibility bounds check. **Fixed** the same way as
+every prior instance - branch on sign, only ever shift a non-negative
+operand (`-((-valeur+7)>>3)` for negatives) - and `ndvRecupeDecalageY()`
+rewritten to call the now-safe `ndvRecupeLineY()` internally rather than
+doing its own separate raw shift. Verified via a temporary debug hook
+(bypassing the splash/attract/window-open sequence to reach real gameplay
+instantly) showing the wall texture now continuous from the top of the
+screen both at rest and while actively scrolling, where it had
+previously shown only a truncated cap segment near page 0.
+
+**A real, severe CPU spike, found via a second direct user report**
+("do fucking optimzations, when game reaches 'washing lines' it gets to
+100% cpu") - "washing lines" is `NDV_LINE`, upstream's own `LineND`
+decorative streamer sprite, and a good description of its actual art (a
+hanging clothesline with laundry-like shapes). Root-caused and fixed in
+two rounds, both measured via the perf overlay with the sprite force-
+activated via a temporary debug hook (its own real spawn condition is a
+25% chance per tick only when the scroll cycle completes, too rare to
+reliably hit by chance in a short verification pass):
+1. `ndvDrawSprites()` called every active sprite's own blit unconditionally
+   on all 8 pages, regardless of the sprite's real vertical footprint -
+   the by-now-familiar "self-gated call still costs a full call every
+   time it's invoked" lesson (Arkanoid/Bert/Tris/Trick/Morpion etc), just
+   never applied to this port's own sprite loop at ship time. Ordinarily
+   low-impact for a narrow sprite, but `LineND` is 104 of 128 columns
+   wide - the widest sprite this whole project has ever ported - so the
+   wasted-call cost here was far larger than the usual case. Fixed with a
+   call-site page-range gate (`if( page < firstPage || page > firstPage +
+   pages ) continue;`), a literal duplicate of `ndvBlitzSprite()`'s own
+   internal bounds check, so it cannot change what renders.
+2. Even after that fix, CPU stayed pegged at 100% - `ndvBlitzSprite()`
+   recomputes several values that never actually depend on which column
+   is being read (`wMax`/`picByte`/`recupeLineY`/`spriteYLine`/
+   `spriteYDecalage`) fresh on *every single column call* - for a 104-
+   column-wide sprite that's ~103 redundant recomputations of the same 5
+   values per relevant page, every frame it's active. The same "hoist
+   row-invariant work out of the per-column loop" lesson already used in
+   TinY Fi's own `tfiBlitzSpriteRow()`. Fixed by rewriting `ndvOrBlit()`/
+   `ndvXorBlit()` to compute those values once per call and only do the
+   genuinely per-column work (`scanA`/`scanB`/`outByte`) inside the loop
+   - `ndvBlitzSprite()` itself is now only called from
+   `ndvComposeAttractFade()`'s own small, bounded erase-grid loop, not
+   from the two general-purpose blit helpers anymore. Measured: CPU with
+   the sprite continuously forced active dropped from a pegged 100% (red)
+   to a steady 53% (green) - verified via screenshot that rendering
+   stayed pixel-identical (a proper clothesline-with-hanging-shapes
+   graphic, correctly XOR-composited) before and after.
+   Real (non-forced) steady-state gameplay CPU, measured separately, is a
+   comfortable 50% (73% for the single very first frame, which includes
+   one-time setup cost) - every render function here was already built
+   with per-object narrow-column gating from the start, so no further
+   O(pixels x objects) hot spot was found once these two fixes landed.
+
+**EEPROM high-score persistence added on direct user request**
+("add eeprom saving /loading calls for high score"), after this port's
+own header comment had originally noted upstream has zero real EEPROM
+usage anywhere (confirmed by direct grep at port time) - the same
+"genuine extension beyond what upstream itself ever did" situation as
+Tiny Bert's own high-score save earlier this session, not a restoration.
+A plain 2-byte score fits comfortably (`ndvScores` only ever grows by 10
+per glob eaten, nowhere near the 65535 ceiling in a realistic
+playthrough), so this uses the same `eeprom_read_word`/`eeprom_write_word`
+shape - and the same established virgin-slot guard - as the majority
+"simple 2-byte score" games in this project. Loaded once in
+`gameNohzdyve_init()`; saved in `ndvBeginAttract()` at the exact point it
+already updates `ndvHiScores` in memory (once all 3 lives are spent and
+the game returns to the attract screen).
+
+Menu thumbnail added to `assets/thumbnails3.png`'s cell 2 (third cell of
+its 4x2 grid, 5 free cells remaining) - verified via screenshot that it
+displays correctly with "BY DANIEL C" underneath, and a spot-checked
+neighbor (Meteor Storm) is untouched.
+
+Verified via Puppeteer throughout: menu registration (alphabetized
+between Meteor Storm and NumberPlace), the splash sequence, the real
+attract screen (the "NOHZDYVE / TUCKERSOFT" title card), the per-life
+window-opening reveal, and active gameplay (steering, wall scrolling,
+glob-eating/scoring, the jaw/climbing-peg/flower hazards, HUD) all render
+correctly. Not independently forced this session: a full player-death
+sequence through to game-over/new-attract-return, and the optional
+"washing lines" streamer's own real (non-forced) spawn condition - both
+reuse logic paths already exercised via the debug hooks used to verify
+the two bug fixes above, so risk is low, but worth a direct check if
+anything looks off.
+
+## Gilbert in the Downland - the second port from `more games/MEGAcompilation_ESP/`
+
+Picked directly by the user ("port next game") as the second of the 3
+games staged from Daniel C's ESP8285/ESP8266 "MEGA TinyJoypad"
+compilation, right after Nohzdyve. An 11-room rope-and-chamber climbing
+platformer - climb/swing on ropes, jump between ledges, dodge falling
+acid drops and a chasing balloon enemy, collect items, and find each
+room's own door to descend further into the "Downland" - a genuinely
+different game from the already-shipped "Tiny Gilbert" despite sharing
+the same character name (confirmed via structure at staging time, not
+just the name - see this file's own "beyond the original scope" entry
+above).
+
+**A real, pixel-readable in-memory framebuffer - a genuinely new
+rendering foundation for this project.** Every other port here streams
+sprite-table bytes straight to `md_drawColumn()` with no intermediate
+buffer, since none of them ever need to read a pixel back once it's
+drawn. Gilbert's own upstream draws real vector line-art (Bresenham
+line-drawing for room walls/ropes) with pixel-level collision read-back
+(`getPixel()`, used to detect whether the player is standing on solid
+ground) - something no prior port's draw model could support. Solved
+with `gitdFrameBuffer[1024]`, a plain `int` array using the exact same
+SSD1306 page-byte layout every game's own column data already implies
+(`idx = x + (y>>3)*128`, `bit = 1<<(y&7)`) - every draw primitive
+(`gitdSetPixel`/`gitdDrawVector`/`gitdBlitzGitd`/etc) reads and writes
+this buffer directly, and `gitdRenderFrame()` streams it to
+`md_drawColumn()` once per frame at the very end with no repacking
+needed, since the layout already matches what that function expects.
+
+**Class flattening, the same treatment as every other class-based
+Daniel-C/Sven-B port in this project**: `TIMERGITD` -> `GitdTimer`,
+`StaticSprite_GITD`/`Sprite_GITD` (a shallow one-level inheritance,
+confirmed during staging) -> one combined `GitdPlayer` struct,
+`AcidDrop_GITD` -> `GitdAcidDrop`, `Ballon_GITD` -> `GitdBalloon`,
+`TIMEOUT` -> `GitdTimeout`, each with `gitd`-prefixed free functions
+taking an explicit struct pointer instead of a bound `this`. GCC's
+case-range switch extension (`case -50 ... -30:`, used a few times in
+upstream's own collision-response dispatch) and nested ternary
+expressions were both converted to plain `if`/`else` chains rather than
+trusted on this dialect, matching this project's own standing caution
+around both constructs.
+
+**A genuine upstream `int8_t`-truncation quirk, deliberately preserved
+rather than "fixed"**: `Get_GS()` relies on a value wrapping through a
+real 8-bit signed type to produce a specific small result from a larger
+intermediate calculation - traced through by hand and confirmed this is
+exactly the *intended* upstream behavior (the wraparound is load-bearing,
+not an accident), so it was reproduced with an explicit modulo/sign
+adjustment rather than either porting it as an unguarded plain `int` (
+which would silently change the result on Vircon32's non-truncating
+`int`s) or "fixing" it into some other formula upstream never actually
+used.
+
+**A real acid-drop animation bug, caught by careful re-reading before
+ever compiling, not by a test run**: an early draft of
+`gitdCalculateAcidDrop()`/`gitdDrawAcidDrop()` dropped upstream's own
+alternating tick pattern - real hardware updates+draws an acid drop's
+position on one tick, then merely polls for the fire button's release on
+the next, alternating every frame via a `Flip` toggle. Missing that
+alternation would have made drops fall at twice their intended speed.
+Caught and fixed (`gitdAcidFlip`, toggled each tick, gating which half of
+the pattern runs) before this port's first build attempt.
+
+**Shift-safety and byte-truncation fixes applied proactively from the
+start**, per the user's own direct instruction to "check for 8bit vs
+32bit issues" before considering the port done, rather than waiting for
+a bug report the way several earlier ports in this project needed:
+`gitdRecupeLineY()` branches on sign from day one (the same
+logical-vs-arithmetic-right-shift guard as HollowSeeker's
+`hsDivByColumnW`/Tiny Pipe's `RecupeLineY`/Nohzdyve's own
+`ndvRecupeLineY`, applied here without first needing a live report), and
+the room-transition mask computation (`gitdRoomTransitionStep()`'s own
+`( 0xFF << t ) & 0xFF` derivation) is explicitly masked at each shift
+site rather than trusting AVR's implicit `uint8_t` narrowing to still
+hold.
+
+**The same row-invariant-hoisting CPU optimization already proven in
+Nohzdyve, applied here proactively too, from the same direct "optimize
+per usual thing" instruction**: `gitdBlitzGitd()` originally recomputed
+`wMax`/`picByte`/`recupeLineY`/`spriteYDecalage` fresh on every column
+call - hoisted to compute once per call instead, the same fix shape as
+Nohzdyve's `ndvOrBlit()`/`ndvXorBlit()` and TinY Fi's
+`tfiBlitzSpriteRow()` before it. Measured via the perf overlay across
+every state (splash/title/playing): a stable 70-74% CPU with FPS holding
+at a steady 60 - comfortably under budget, matching the "Tiny Bert-style
+baseline, no further action needed" precedent already established
+elsewhere in this project rather than chasing a lower number for its own
+sake.
+
+**A temporary "god mode" testing aid, added and then fully removed** -
+requested directly ("can you add a temporary god mode so i don't die
+from objects and give unlimited lives") to make manual testing of the
+game's later rooms practical without dying repeatedly along the way.
+Wired as a single guard checked in the 4 places the original game can
+actually kill the player or spend a life (`gitdSubLive()`,
+`gitdGravityUpdate()`, `gitdTimeoutFunction()`, `gitdSpriteColid()`).
+Removed in full once testing was done, confirmed via a project-wide
+`grep -n "gitdGodMode"` returning no matches before the final rebuild.
+
+**A direct user question about the ending, investigated and confirmed
+as faithful upstream behavior, not a bug**: "is there no win screen when
+entering the door on final chamber 8? it seems the game resetted to
+level 1 again." Traced the real room-connection data (`InAndOut_GITD`)
+rather than guessing - room 9's own door 16 leads back to room 0 (the
+same door ID reused as the special `GITD_START_ROOM` teleport target),
+and an exhaustive grep of the entire upstream source turned up no win/
+victory/game-complete screen anywhere at all. The room layout is a
+genuine, intentional loop - reaching the last chamber's door does return
+to room 0, and that's the whole game as originally shipped, not a
+missing feature this port dropped.
+
+**High-score EEPROM persistence, confirmed already correctly wired in
+from the initial port** - a direct mid-session question ("does the game
+have a highscore? does it save/reload it from eeprom, if not add it in")
+turned out to need no code changes: `gitdHiScores` is loaded via
+`eeprom_read_word( 0 )` (with the standard 65535 virgin-slot guard) in
+`gameGilbertDownland_init()`, and saved via `eeprom_write_word( 0,
+gitdHiScores )` the moment a new high score is confirmed at the
+game-over transition in `gitdUpdatePlaying()` - the same simple 2-byte-
+score shape used throughout this project, already in place before this
+question was even asked.
+
+**Two more real bugs found via direct user reports after the port
+otherwise looked finished**, both diagnosed by tracing the exact upstream
+mechanism rather than guessing from the symptom:
+
+1. *"on the attract screen the text '- start game -' is supposed to
+   slightly blink but the black thing only obscures top part of that
+   text"* - the port had replaced upstream's real erase mechanism with a
+   simplified stand-in that turned out to be wrong, not just approximate.
+   Upstream's own `DrawMainScreen()` blinks the text by calling
+   `MEGA82XX.drawErase(t, 45, byte__GITD, 0)` for every column `t` from
+   25 to 83 - a sprite-based erase using `byte__GITD` (a 1x8-raw-pixel,
+   solid-`0xff` sprite), i.e. an 8-pixel-tall solid erase band. This
+   port's own `byte__GITD` table had been judged obsolete during initial
+   porting and dropped in favor of a plain `gitdEraseHLine( 25, 83, 45 )`
+   helper that only clears a single 1-pixel row - wrong, not just
+   simplified: it erased only the very top edge of the 8-pixel-tall text,
+   exactly matching the reported "obscures top part" symptom. **Fixed**
+   by replacing the call with `gitdDrawRecBW( 25, 45, 83, 52, 0 )` (an
+   explicit 8-row-tall black rectangle over the same column range,
+   equivalent to the real sprite-based erase), and removing the now-
+   unused `gitdEraseHLine()` helper entirely. Verified via a Puppeteer
+   poll across the blink cycle: the text now fully appears and fully
+   disappears each cycle, rather than only ever losing its top row.
+2. *"when pressing the action button on the 'download / F' screen it
+   jumps to attract screen but it immediately seems to start the game as
+   well, like a certain button press is acted upon twice"* - a genuine
+   double-fire bug. `gitdUpdateSplash()` and `gitdUpdateTitle()` both
+   checked `isFirePressed()` as a plain level read (matching upstream's
+   own real-hardware polling shape) rather than an edge-detected press.
+   Since a single physical keypress spans several real 60fps frames, and
+   the state dispatcher only calls one state's own update function per
+   frame based on the state entering that frame, the exact frame a
+   transition happens (splash->title) leaves the button still physically
+   held on the very next frame - which the *new* current state
+   (title) then read as its own fresh "start game" press, immediately
+   cascading straight into gameplay from what should have been a single
+   splash-dismissal press. **Fixed** with a shared, edge-detected
+   `gitdFireEdge` (`fire && !gitdPrevFire`), computed once per real frame
+   in `gameGilbertDownland_update()` before dispatching to whichever
+   state is active, replacing the raw `isFirePressed()` reads at both
+   transition points - a held press can now only ever satisfy one state
+   transition's edge, not two in a row. Verified via Puppeteer: the same
+   press sequence that previously cascaded splash -> title -> gameplay in
+   one motion now correctly stops on the title/attract screen, requiring
+   a genuinely separate press to actually start a game.
+
+Menu thumbnail added to `assets/thumbnails3.png`'s cell 3 (fourth cell of
+its 4x2 grid, 4 free cells remaining) - verified via screenshot that it
+displays correctly with "BY DANIEL C" underneath, and that the atlas as a
+whole still renders correctly elsewhere with no corruption from the
+composite.
+
+Verified via Puppeteer throughout: menu registration (alphabetized
+between Frogger and HollowSeeker), the "F DOWNLAND" splash screen, the
+real attract/title screen (including the now-corrected full-line text
+blink), starting a game (room-transition wipe into the first chamber),
+and active gameplay (movement, jumping, room HUD, acid drops) all render
+correctly. Not independently forced this session: reaching room 9's own
+looping exit door in real play (confirmed correct by tracing the level
+data directly instead, per the investigation above) and a genuine
+player-death-to-game-over sequence with a new high score actually saved
+- both reuse logic paths already exercised via the temporary god-mode
+testing and the EEPROM code-path confirmation above, so risk is low, but
+worth a direct check if anything looks off.
+
+## Ardumania - the third and last port from `more games/MEGAcompilation_ESP/`
+
+Picked directly by the user as the third and final game staged from
+Daniel C's ESP8285/ESP8266 "MEGA TinyJoypad" compilation, completing that
+whole discovery batch (Nohzdyve and Gilbert in the Downland shipped
+earlier). An isometric-scrolling Pac-Man-style maze chase: steer through
+a diamond-tiled maze eating dots and big dots, dodge up to 7 ghosts
+(frightened/eaten modes triggered by big dots), collect a periodic bonus
+fruit, across 9 levels (5 distinct layouts, the last 4 reusing the first
+4 at rising ghost count/speed via a real `ArduMap()`-style linear
+interpolation). 3 lives per game, a real persisted top-3 high-score
+leaderboard with a selectable avatar (Ardumania/Ghost/Fruit).
+
+**By far the largest single port this project has done** - 100 upstream
+functions, 56 real data tables (a `TIMER`/`SpriteAmania` class pair, the
+latter with genuine per-instance movement logic, not just a data-holder
+like Nohzdyve's own sprite struct), goto=10/while1=7, comparable in raw
+scope to several Tier-2 Daniel-C games combined. Same
+`ESPCOMPATIBILITY`/`ESPKIT.h` shim lineage as Nohzdyve/Gilbert - the same
+`[width, raw_pixel_height, ...]` sprite header convention, the same
+`255-freq` tone formula, the same `TINYJOYPAD_LEFT/RIGHT/UP/DOWN`/
+`BUTTON_DOWN`(held)/`BUTTON_UP`(released) input macros mapping directly
+onto `isLeftPressed()`/etc and `isFirePressed()`.
+
+**A real persistent pixel framebuffer, matching Gilbert in the Downland's
+own architecture rather than Nohzdyve's per-page-buffer one** - the same
+architectural choice made for the same reason: `ESPKIT.h`'s own
+`drawSelfMasked`/`drawErase`/`drawOverwrite` all accumulate into one
+persistent `Disp_1->buffer[1024]`, called in an intricate, order-
+dependent sequence scattered through a large nested per-tile isometric
+render loop (background walls/dots/gate, fruit, each ghost, the player -
+several OR/AND-NOT/clear-then-stamp calls per grid cell, in a specific
+temporal order matching upstream's own draw priority). Unlike Nohzdyve's
+simpler sprite list (cleanly restructurable into "for each page,
+composite once"), this game's isometric per-tile scan has no such clean
+decomposition - reusing Gilbert's own full 1024-word buffer
+(`amaniaFrameBuffer`) was the lower-risk choice, letting every draw call
+just walk its own real column/page footprint and combine into the buffer
+exactly once, in the same order upstream does, with no restructuring
+needed to get composition order right.
+
+**Class flattening**: `TIMER` -> `AmaniaTimer` (a trivial data holder,
+same shape as Nohzdyve's own `NdvTimer`), `SpriteAmania` -> `AmaniaSprite`
+struct + `amania`-prefixed free functions taking an explicit pointer -
+but unlike every prior class-based port in this project, `SpriteAmania`'s
+own methods (`AdjustControl`/`CheckPriorityX/Y`/`RefreshMove`/`GoUp/Down/
+Left/Right`) carry real per-instance movement/collision logic, not just
+field accessors - the flattening here is closer in spirit to Gilbert's
+own `GitdPlayer` struct than to Nohzdyve's simpler sprite-slot model.
+
+**Two genuine, proactively-fixed logical-vs-arithmetic-right-shift
+risks** (Vircon32's `>>` is documented *logical*, not arithmetic - the
+same bug family already found in HollowSeeker/Tiny Pipe/Nohzdyve/TinY Fi/
+Gilbert): `SpriteAmania::GoUp()`/`GoDown()`'s own `DecX = -(DecY >> 1)`
+shifts `DecY` while it's still genuinely negative (its own real range is
+[-7, 0]) - fixed with a shared sign-safe `amaniaShiftR1()` halving
+helper. `Center_Screen()`'s own `IsoScrollY >> 1` was checked too and
+confirmed always safe (`IsoScrollY = -DecY` is always >= 0 given `DecY`'s
+own range), so left as a plain shift there - the same "audit every shift,
+don't assume they're all equally risky" discipline already established.
+
+**A genuine out-of-bounds-Y gap in upstream's own `ExploreMap()`, found by
+inspection before ever compiling, not a report**: `Read2Bits()`/
+`Define2Bits()`/`Initialize2Bits()` all explicitly guard `y_ < 0 || y_ >
+H-1` before indexing, but `ExploreMap()` (the real wall-collision check,
+called via `ExploreMapChose()` from every `CheckPriorityX/Y()`/`GoUp/
+Down/Left/Right()` call with a raw `GridY +/- 1`, reachable at `GridY ==
+0`) has no such guard - harmless on real AVR flash (an adjacent-PROGMEM-
+byte read), a genuine out-of-bounds global read here. Fixed by adding the
+same bounds guard `Read2Bits()` already has (return 1/"wall", matching
+what a border row would represent) directly in `amaniaExploreMap()`, safe
+by construction rather than guessed.
+
+**Deliberate simplifications, dropping several real blocking
+`My_delay_ms()` pauses rather than converting each into its own explicit
+wait-state**, matching this project's own "effort/fidelity tradeoff for a
+purely decorative pause" precedent used elsewhere (Nohzdyve's own dropped
+splash sequence, Space Attack's attract slide-in): upstream's own boot
+sequence (`FakeLoad()`/`Fail()` - an elaborate LED-flash/beep-cadence
+animation with a random 10% "loading failure" easter egg, zero gameplay
+effect) collapsed to a single static boot-logo screen (fill white, erase-
+composite the real `BOOTINTRO` art, press Fire to continue); `collision()`'s
+own real `My_delay_ms(250)` pause right after the ghost-eaten sound
+(before awarding points) and `ProgramExitMode()`'s own leading
+`My_delay_ms(400)` (before the fade-out even begins animating) are both
+dropped outright - the sound/score/mode-switch and the fade sequence
+itself all still happen on the correct frame, just without the extra
+real-time freeze. The avatar-select `Menu()` and the 3-slot `ScoreMenu()`
+leaderboard are both real, functional screens (not decorative) and are
+ported at full fidelity, just converted from a blocking `while(1)` to
+explicit per-frame state dispatch like every other port in this project.
+
+**AnimLvlChange() - initially simplified to a plain black hold, then
+restored to the real animation at direct user request**: the player
+walks off the left edge of the screen (`D=0`), then reverses and walks
+back across trailing the level's own ghost count behind them (`D=1`),
+against a scrolling border and a row of decorative "Plate" platforms -
+ported as an explicit `AMANIA_STATE_LEVEL_TRANSITION` state advancing the
+walk position/animation frame/border-scroll offset once per real frame,
+the usual "blocking loop -> explicit resumable state" treatment. Needed
+re-adding two data tables (`amaniaPlate`/`amaniaBlack`) that had been
+judged dead and removed during the initial simplified-transition pass.
+
+**A real, previously-uncredited melody, found only because the user
+insisted "normally there is music playing" during this animation and
+asked me to re-check rather than accept my own first assumption**:
+upstream's own `AnimLvlChange()` wraps a `MEGA_PLAY_MUSIC(&score[0])`
+call in a literal `/* */` comment block, gated behind a `FirstLoad` flag
+- my first pass read this as "the original author disabled it" and
+dropped both the call and the `score[]` table entirely as dead code, the
+same reasoning already applied (correctly) to Tiny Bomber's own dead
+`Music[]`-table off-by-one elsewhere in this project. That reasoning
+turned out to be wrong here: after being pushed to re-verify, tracing the
+table's own real content (`score[]`, 59 freq/dur pairs, several genuine
+freq=0 rests mixed with real tones - clearly a composed tune, not
+filler) confirmed this is real, intentional content simply left disabled
+in this one archived copy of the source, not evidence the melody was
+never meant to play. Restored in full: re-added the `score[]` table
+(now `amaniascore`) and queued all 59 note-pairs into the shared frame-
+stepped sequencer (resized from 24 to 64 slots specifically to hold it -
+every other cue in this file uses well under 24 notes) when the
+transition begins, playing alongside (not replacing) the two direct
+confirm-tone calls `AnimLvlChange()` also fires unconditionally at that
+same moment. **Generalizable lesson**: a commented-out call sitting next
+to real, well-formed data is worth a second look before concluding it's
+genuinely dead - "the code doesn't run" and "the content was never
+intended to be heard" are two different claims, and this project's own
+usual "confirm dead code via grep before dropping it" discipline should
+extend to checking *why* it's dead, not just *that* it is, when the
+data being skipped looks intentional rather than vestigial.
+
+**A real audio bug in that same restoration, found via direct user
+report** ("i hear a seemingly small blip... it may be collapsing all the
+sounds into 1"): an early attempt routed the two confirm tones
+(`Snd(100,255);Snd(60,255);`) through the same frame-stepped sequencer
+used for burst-collapse-prone cues elsewhere in this project, reasoning
+(incorrectly) that Vircon32's audio channel still had no queue - but
+`md_playTone()` became genuinely multi-voice project-wide in an earlier
+session (see this file's own "`md_playTone()` became genuinely
+multi-voice" section above), specifically *because* a single shared
+channel was the wrong model - two back-to-back `Sound()` calls each
+claim their own free SPU channel and can't step on each other anymore.
+Applying the old single-voice-era wait-frame-pacing fix here was
+solving a problem that no longer exists on this engine, and interacted
+badly with `amaniaBeginLevel()`'s own preceding `amaniaSoundSystem(5)`
+confirm-click call (also freshly re-clearing the shared sequencer state)
+to genuinely suppress audible output. **Fixed** by reverting to a direct,
+literal translation of upstream's own two calls
+(`Sound(100,255);Sound(60,255);`), matching upstream's own simplicity now
+that the collision concern doesn't apply, and restoring the confirm
+click uniformly across all three menu actions (Start Game/High Score/
+Sound toggle) rather than special-casing Start Game to avoid a collision
+that was never real to begin with.
+
+**A separate, genuine duration-quantization fix to the shared sequencer
+itself**, found while investigating the above (not fully superseded by
+reverting the transition's own two tones to direct calls - the shared
+`amaniaAdvanceSfx()` fix stayed, since the 59-note melody genuinely does
+need it): the sequencer previously fired exactly one note per real frame
+regardless of that note's own true duration, computed from the same
+`freq/dur -> real-seconds` formula every ELECTROLIB.h-lineage game in
+this project already uses. For every *other* burst in this file (fruit/
+ghost-eaten/dot/dead sweeps, all built from short `dur` values ~1-10)
+that real duration already rounds to under one frame, so immediate
+advance was already correct there and stayed unchanged - but the
+melody's own real note durations (tens of milliseconds each) need actual
+multi-frame waits between notes to be audible as a real tune rather than
+a blur. Fixed by having `amaniaAdvanceSfx()` compute each note's own real
+duration in frames and hold before advancing to the next one.
+
+**CPU optimization, applied in five real, individually-measured rounds
+after the user pushed hard on this specifically** - GPU stayed a steady
+5-15% throughout (confirming this was never a fillrate/pixel-count
+problem), CPU was the real constraint:
+1. `amaniaMAIN` (the Menu screen's own full 116x64 background artwork -
+   by far the widest/tallest sprite in this whole port, ~928 real inner-
+   loop iterations per call) was being fully recomputed via the general
+   sprite-blit path every single frame despite never changing - cached
+   into `amaniaMainCache[1024]` exactly once (the first time the menu is
+   ever shown) and merged with a plain OR loop thereafter, the same
+   "cache what doesn't change every frame" lesson as Tiny Doc's own
+   row-scoped dirty tracking, just for a permanently-static asset.
+   Measured: Menu screen CPU dropped from a pegged, visibly truncated
+   100% to a clean, fully-rendered 71%.
+2. That same cache-merge was itself doing a redundant *second* full-
+   1024-cell pass on top of `amaniaClearBuffer()`'s own zero-fill (clear,
+   then separately OR the cache in) - collapsed into one direct-copy pass
+   that does both jobs at once, at direct user prompt ("do the 1024
+   pixel stuff optimizations").
+3. Every wall/dot/fruit/ghost/player draw in the gameplay render loop
+   pairs an `amaniaDrawErase()` (mask) with an `amaniaDrawSelfMasked()`
+   (real sprite) call at the *same* position - since every such pair
+   shares an identical `[width,height]` header (confirmed for all 7 real
+   pairs in this file), a new combined `amaniaDrawEraseThenMask()`
+   computes the shared row-invariant setup once and runs one column loop
+   for both halves instead of two separate general-purpose calls each
+   redoing that setup and re-walking the same footprint.
+4. All three blit primitives (`amaniaDrawSelfMasked`/`amaniaDrawErase`/
+   the new combined function) had their own per-column sprite-byte
+   computation fully inlined, removing the `amaniaSpriteByte()`/
+   `amaniaSplitDecalageY()` function-call layer from the hottest loop in
+   the file - without v32opt's own inlining pass (this project's own
+   standing test builds run with `SKIP_V32OPT=1`, and the user was
+   explicit that v32opt itself is not an acceptable fix here), raw
+   per-call overhead in a loop this hot is a real, measurable cost on its
+   own, the same finding already made for Tiny Arkanoid/Run Dude Run/Tiny
+   Arena's own `arVBuf()`.
+5. Two off-screen-skip checks, one per axis: `SCREEN_BLOCK_W` (13 cols x
+   `XSTEP` 14 = 182px) deliberately overscans past the real 128px screen
+   width for smooth camera scrolling, so a per-cell check skips any
+   column whose sprite footprint can't possibly be visible before ever
+   calling a draw function for it; separately, `SCREEN_BLOCK_H`'s own
+   `scanY=8` (the loop's last row) was found, by direct derivation, to
+   *always* compute a `tpy >= 64` (already past the last valid page)
+   regardless of camera position - an unconditional, guaranteed waste of
+   up to 13 cells' worth of work every single frame, skipped with one
+   whole-row check before ever entering that row's own inner column loop.
+   Both skips were verified safe from a gameplay standpoint: only the
+   player's own grid cell carries real side effects (dot pickup/scoring),
+   and `Center_Screen()` always keeps the camera centered on the player,
+   so that one cell is never among the ones either skip removes.
+
+**A second round, requested directly after the first landed**, found
+three more real, if smaller, levers:
+6. `amaniaPannel()` (the HUD score/lives panel, drawn every single
+   gameplay frame) calls `amaniaDrawOverwrite()` twice for its own
+   "Digital"/"Dlive" icons - the one blit primitive that had been missed
+   by round 4's inlining pass. Inlined the same way as the other three.
+7. The per-cell off-screen column check (item 5 above) originally ran
+   *after* `amaniaLoopScreen()`/`amaniaRead2Bits()`/`amaniaOutCheck()` had
+   already done their own work for that cell - moved earlier, computing
+   just `tpx` first and skipping the grid-lookup work too for columns
+   that can't possibly be visible, not only their draw calls.
+8. The per-cell ghost-position check (`for each of up to 7 ghosts, does
+   this cell match their position`) ran for *every* one of the ~130
+   scanned cells every frame - a real O(cells x ghosts) shape (up to
+   ~900 comparisons/frame), the exact same pattern already found and
+   fixed once before in this project, in Tiny Mania's own render loop
+   (`tmnGhostCellHead`/`tmnGhostCellNext`). Applied the identical bucket-
+   linked-list technique here at direct user request ("do the ghost
+   position look up fix as well same as in tiny mania"): a small
+   `amaniaGhostCellHead[143]`/`amaniaGhostCellNext[8]` index built once
+   per frame in O(ghosts) by inverting the scan loop's own forward
+   scanX/scanY -> camScanX/camScanY mapping (camScanY has no wraparound,
+   so it inverts directly; camScanX wraps by at most one level-width in
+   either direction, so of the 3 candidate un-wraps at most one ever
+   lands inside the real 13-cell scan window), then queried in O(1) per
+   cell instead of looping every ghost.
+
+Measured outcome, via repeated real-gameplay perf-overlay checks
+(including deliberately scrolling into map corners, a genuinely dense
+level-1 starting room, and, via a temporary debug jump, level 4
+specifically): the *visible truncation* failure mode (a real frame cut
+off mid-render, missing content - this project's own documented over-
+budget failure signature) is gone in every tested scene, including that
+dense level-1 starting room and level 4's own `InvertBlock` mode (which
+draws the full block sprite on every *non-wall* cell instead of just
+walls - confirmed via the debug jump to cover almost the entire visible
+screen with real texture, a fundamentally denser scene by the original
+game's own design, not an artifact of this port). The raw CPU% reading
+itself still pegs at a clamped 100% in these same dense scenes even
+after all eight fixes above - the meter's own 0-100 clamp can't show
+whether later rounds actually lowered the real number while it was
+already at the ceiling, the same measurement limitation this project's
+own Tiny Mania throttle investigation already documented. Getting
+further below the ceiling specifically in these dense scenes would need
+a genuinely different rendering algorithm (for `InvertBlock` levels:
+fill the visible area with the checkered pattern once, then punch black
+holes for the sparse wall corridors, inverting which case is the
+expensive per-cell one; for dense normal rooms: restructuring away from
+this port's own full-framebuffer model toward a per-page composite,
+Nohzdyve's own architecture) rather than another incremental tweak -
+flagged as a known, understood, and deliberately not-yet-attempted
+ceiling (the same "inherent cost of dense visual style, not a fixable
+inefficiency in the compositing logic itself" conclusion this project
+already reached for Tiny Bert), rather than risking a structural rewrite
+of the render loop in an already very large, freshly-written file.
+
+**EEPROM**: upstream's own 3-slot leaderboard (`{avatar, score}` per
+slot, a marker byte to detect a virgin card) is restored through this
+project's own `eepromShim.h` - the marker-byte trick is dropped entirely
+since the shim's own magic/checksum system already serves that exact
+purpose; each slot is just `eeprom_read_byte`(avatar) +
+`eeprom_read_word`(score) at a fixed 3-word stride, with the standard
+65535 virgin-word guard already established project-wide. Confirmed
+wired correctly: loaded once in `gameArdumania_init()`, saved via
+`amaniaCheckNewHighScore()` (classement + persist all 3 slots) at both
+real game-over paths (out of lives, and clearing the final level).
+
+`rand()%n`/`rand()%7` routed through the shared `arand()` helper; the
+fixed 24-entry `rndmove[]` cycling table (`RandVar()`, upstream's own
+*deterministic* pseudo-random source, not a real RNG call) is kept as a
+literal translation, not replaced. `switch`/ternary avoided proactively
+throughout (every one of upstream's many `switch` blocks and `?:`
+expressions rewritten as `if`/`else` chains, matching this dialect's own
+well-documented lack of support); binary literals (`0b11`) rewritten as
+decimal.
+
+Data tables byte-diff-extracted via a small Python script (parsing the
+real PROGMEM array literals directly out of `SpriteAMania.h`, not hand-
+transcribed) - all 56 tables (plus the later-restored `score[]`, for 57
+total), matching this project's own established anti-Bomber-dropped-byte
+discipline.
+
+Menu thumbnail added to `assets/thumbnails3.png`'s cell 4 (the first cell
+of a new second row - the grid grew from 4x1 to 4x2 to fit) - verified
+via screenshot that it displays correctly with "BY DANIEL C" underneath.
+
+Verified via Puppeteer throughout: menu registration (alphabetized
+directly after "2048"), the splash screen, the avatar-select menu
+(cursor navigation, avatar switching, the Start Game/High Score/Sound
+items), the 3-slot score menu (correctly showing all-zero on a fresh
+card), the restored walk-transition animation (player walking off-
+screen, reversing, ghosts trailing), and active gameplay (movement, dot-
+eating with score climbing 0->75->135 across a real play session, camera
+following the player, ghost rendering) all render and function
+correctly. Not independently forced this session: a real ghost
+collision/death sequence, eating a big dot to frighten ghosts, catching
+a bonus fruit, and a full level-clear - all reuse logic paths that are
+otherwise direct, unmodified translations of upstream's own already-
+traced control flow, so risk is low, but worth a direct check if
+anything looks off.
+
+**A split-rate throttle, added afterward at direct user request and then
+refined twice more** ("apply 30 fps lock", then "set fps lock during
+gameplay to 60 and fps lock in menu to 30", then "actually can the 60 be
+50 like upstream ?"). Checking for the first request surfaced a real gap
+in the initial port: unlike the "no timing model whatsoever upstream"
+category several other ports in this project fall into (which this port
+had been wrongly assumed to match), Ardumania actually has a genuine
+real-time dual-rate throttle - `MEGA82XX.SetFPS()`/`FPS_Temper()`, called
+with `SetFPS(30)` specifically for `Menu()`/`ScoreMenu()` and `SetFPS(50)`
+for everything else (`BootIntro`, the level-transition walk animation, and
+real gameplay) - never ported at all, since the initial pass never checked
+for it. A uniform 30fps lock was tried first (matching this project's own
+"just lock it to the requested rate" precedent rather than reproducing the
+dual split precisely), but the user asked for the real split instead: Menu/
+ScoreMenu throttled to exactly 30fps via a plain integer divisor
+(`AMANIA_TICK_DIVISOR = 60/30`, an exact division), every other state
+(Splash/LevelTransition/Playing) throttled to 50fps via a Bresenham-style
+accumulator (`amaniaPlayTickAccum += 50; if >= 60 then -= 60 and run one
+tick` - the same technique already established for Tiny Gilbert's own
+40fps target, needed here too since 60 doesn't divide evenly by 50) rather
+than left fully unthrottled at the engine's native 60fps. Both throttle
+mechanisms gate the entire `gameArdumania_update()` body including the
+fire-edge computation (`amaniaFireEdge`/`amaniaPrevFire` only update on
+ticks that actually run, avoiding a missed-press risk that a raw per-real-
+frame edge check combined with a skipped dispatch could otherwise cause),
+matching the majority "gate the whole tick, not just movement" shape
+already used for NumberPlace/HollowSeeker/t2048/Doc/Pacman/Pipe/Tiny
+Mania/Jump Slime/TinyRoG/TinY Fi in this project. Every existing frame-
+counted timer in the file (the "Player 1 Ready" banner, the transition
+animation's own walk position, the sfx sequencer's own wait-frames, every
+`GhostTimer`/`HighSpeedTimer`-style real-time counter) was deliberately
+left unrescaled, matching this project's standing "one divisor, no dual
+bookkeeping" practice - they simply now take longer in real time,
+proportional to whichever real rate their own state runs at (2x for
+Menu/ScoreMenu, 1.2x for everything else). Verified via Puppeteer: the
+menu still renders/navigates correctly at its own throttled rate, and the
+full walk-transition animation into real gameplay (movement, dot-eating,
+score climbing to 60, camera scroll) all function correctly at the
+gameplay rate. The perf overlay's own already-documented Tiny Mania
+throttle finding still applies here too - this reduces *average* load by
+alternating cheap (skipped) and full-cost (real) frames, not the *peak*
+per-tick cost of the frames that still run full render logic, which stays
+exactly what the eight optimization rounds above already established it
+to be.
+
+**A real bug found via direct user report right after the FPS work**
+("does the sound on/off menu option make use of EEPROM ? because if i set
+it to off sound is still on"). Two separate questions, two separate
+answers: `amaniaAudio` is **not** EEPROM-backed at all (it's a plain
+session-local flag, reset to `1` every `gameArdumania_init()` - only the
+3-slot high-score leaderboard is persisted for this game, matching the
+plan this port was always scoped to). But the second half was a genuine,
+real bug: `amaniaAudio` had only ever been wired to the speaker-icon
+draw (`if( amaniaAudio ) amaniaDrawSelfMasked( 77, 51, amaniaaudio, 0 );`,
+the "sound waves" overlay on the base speaker glyph) and the toggle
+itself - it was never actually checked by anything that calls `Sound()`,
+so switching it off changed the icon but genuinely left every sound
+effect playing. **Fixed** by gating all 4 real `Sound()` call sites in
+the file behind `amaniaAudio` (found via a grep for every `Sound(` call,
+not just the obvious ones): `amaniaSoundSystem()` (covers cases 0-5,
+i.e. every ghost-eaten/level-clear/dot/dead/confirm-click cue routed
+through it), `amaniaAdvanceSfx()` (the shared frame-stepped sequencer
+that actually plays queued notes - gated here too, not just at the
+enqueue site, so toggling off mid-melody immediately silences it rather
+than letting an already-queued sequence finish), the dead-mania descent
+tone in `amaniaAnimateDeadMania()`, and the two direct confirm tones in
+`amaniaBeginLevel()`. Rebuilt clean; verified via Puppeteer that the icon
+still toggles correctly (the sound-wave overlay appearing/disappearing,
+unchanged from before this fix) - actual audio silence isn't verifiable
+via screenshot, matching this project's own standing caveat for every
+other audio-correctness fix in this file.
+
+**A second real bug, found the same way** (a direct user question - "can
+you check if i press right i don't get option for the ghost but
+immediatly see cherry" - followed by their own correct hunch, "it may not
+have a debounce or something"): the Start-Game row's own avatar picker
+(Left/Right cycling the icon shown next to "Start Game" between the
+Ardumania face/ghost/cherry-fruit, purely cosmetic - see the earlier
+Q&A in this file's own session history for what it actually does) read
+`isLeftPressed()`/`isRightPressed()` as a plain level check with no
+debounce at all - since Menu is now throttled to 30fps (see the FPS work
+above), even a quick physical tap easily spans more than one tick, so the
+avatar silently advanced twice per tap, skipping the middle choice
+entirely. Checking upstream's real `Menu()` (`Ardumania-ESP.h`) confirmed
+this is a genuine regression, not a faithful port: upstream gates the
+exact same check with a real one-shot latch, its own local `OneClick2`
+(consumed the instant a press is read, only re-armed once *both*
+directions read released) - and also plays a `SoundSystem(5)` confirm
+click on every avatar change, which the port was missing too. The
+project's own earlier warning-cleanup pass had removed a same-shaped
+`amaniaMenuOneClick2` global as apparently-unused, when it should have
+been wired up instead - a case of a debounce flag looking dead only
+because nothing used it yet, not because nothing needed it. **Fixed**
+with a persistent `amaniaAvatarOneClick` flag (initialized `1` in
+`gameArdumania_init()`) reproducing upstream's exact arm/disarm shape,
+plus the missing confirm-click sound on each change. Verified via
+Puppeteer with a sequence of quick (100ms) taps: Right -> ghost, Right
+-> cherry, Left -> ghost - each tap now advances exactly one step,
+matching the user's own expected behavior.
+
+## Road Rush - the first port from the sixth discovery pass's `BFlight` bundle
+
+Picked directly by the user ("port the next game") as the strongest,
+most clearly non-duplicate candidate from the sixth beyond-scope
+discovery pass's own `BFlight` bundle (see that section above for how it
+was found) - both research agents independently flagged `driveGame`
+(a top-down perspective driving/dodging game, distinct from Tiny Bike's
+own side-scrolling motocross mechanic) as the clearest new-genre win of
+the whole batch. `bsideFly` (free-flight/combat) and `mazeRunner`/
+`mazeGenerator` (real procedural maze navigation) remain staged and
+un-ported - `BFlight` bundles 3 genuinely distinct games in one upstream
+source, and this project's own established precedent (Obono's
+`TinyJoypadWorks` becoming 3 separate entries, `UFO_Stacker_Attiny`
+becoming 2, `UFO_Breakout_Arduino` becoming 1) is to split a bundle into
+separate cartridge entries and port them one at a time, not merge them
+- confirmed directly with the user mid-session after they asked why only
+part of the bundle was ported.
+
+Menu title "ROAD RUSH", lifted directly from the game's own in-source
+credit text (the intro scroller's own " -= Road Rush =-" line) rather
+than the generic `driveGame` filename, the same "read the game's own
+on-screen text for its real name" approach already used for Bat
+Bonanza/Falling Blocks. Credited "TONY M (TONYM128)" - confirmed via the
+BFlight repo's own README, which names both the real name and the GitHub
+handle. MCU credited as plain **ESP8266** (not ESP8285, unlike the 3
+Daniel-C MEGA-compilation games) - confirmed directly via
+`platform_audio_esp8266.cpp`/`.h`'s own real hardware target, a genuinely
+different chip than every other ESP-based game in this cartridge.
+
+**A genuinely different rendering foundation, but the same fix already
+proven for Gilbert in the Downland/Tiny Arena**: upstream's own
+`ScreenBuff.consoleBuffer[8192]` is a full, real, per-pixel-addressable
+`bool` framebuffer (not a page-byte stream) - every draw primitive in
+`gameCommon.cpp` sets individual pixels directly, with the real
+SSD1306Brzo Arduino library only converting that into hardware page-bytes
+internally at the very end of each frame. Reproduced with the same
+`int[1024]` page-byte-laid-out framebuffer + `drvSetPixel`/`drvGetPixel`
+bit-op helpers already established - see the file's own header comment
+for the full architecture writeup (font extraction/indexing, the
+`drawObjectFill` silhouette-with-highlights sprite technique, the
+`drawScroller` bug preserved faithfully rather than "fixed", the added
+attract screen since upstream has none, and why `fixpoint.h` was never
+needed).
+
+**Two real bugs and one design correction, all found via direct, often
+blunt live user feedback rather than this session's own testing catching
+them first** - a good reminder that headless screenshot sampling, even
+soak-tested, can miss things a real playthrough catches immediately:
+
+1. **Controls felt backwards**: upstream's real button wiring is
+   `P1_Top`=brake, `P1_Bottom`=accelerate (an arbitrary hardware pin
+   assignment on the original BSides badge, not a deliberate design
+   choice) - ported faithfully at first as Up=brake/Down=accelerate,
+   which reads backwards on a real gamepad. Swapped to the conventional
+   Up=accelerate/Down=brake mapping instead, the same kind of intuitive-
+   over-literal remap already applied to Tiny Arkanoid's paddle axis and
+   Tiny Lander's thrust controls.
+
+2. **A "Level 3" starting point that briefly got "fixed" then reverted**:
+   upstream's own level-slider text is literally `"Level " + (level+2)` -
+   not a porting mistake, a real leftover from the full `BFlight` chain
+   this driving game was one stage of (reached as stage 3, after 2 stages
+   of the `bsideFly` mini-game preceding it there). Once the user asked
+   "is it normal the actual racing starts on level 3", it was first
+   changed to drop the `+2` (showing the real level number directly,
+   reasoning that a standalone port of just this one stage shouldn't
+   carry a numbering offset from stages that don't exist here) - the user
+   then asked directly to restore the literal upstream value, since this
+   game is understood to remain part of that same `BFlight` series
+   (`bsideFly`/`mazeRunner` are still staged for a future port from the
+   same bundle) and its own level numbering should stay consistent with
+   that wider context rather than being renumbered in isolation. Reverted
+   back to `level+2`.
+
+3. **CPU pegged at 100% during real gameplay, with visible flickering** -
+   the most involved fix of the three, needing multiple rounds and one
+   genuine correctness regression along the way:
+   - Round 1 (found via the perf overlay before the user ever reported
+     anything): every draw primitive routed through a single-pixel
+     `drvSetPixel()` call - inlined the page/bit math directly into
+     every primitive instead, and replaced `drvDisplayClear()`'s own
+     8192-call-per-frame loop with a flat 1024-word buffer fill.
+   - Round 2: even the plain 3-line attract screen still read 83% -
+     traced to `drvDrawChar()` calling a separate `drvGetFontPixel()`
+     function once per pixel (64 calls/character), each redundantly
+     recomputing the glyph's own row/column offset - inlined that lookup
+     too, computing the offset once per character. Dropped attract to
+     62%, driving gameplay (a single sampled frame) to 18%.
+   - **That 18% turned out to be a misleadingly optimistic single-frame
+     sample**, not representative of sustained play - a direct, blunt
+     user report of real flickering ("i still have 100% cpu dumbass twat
+     your screenshots probably don't show it or you don't look at
+     complete graph") led to an extended soak test that caught an
+     actually-truncated frame (only one road stripe drawn, HUD cut off
+     mid-row) - this project's own well-documented "CPU exceeded budget,
+     execution stopped mid-instruction-stream" signature, not just an
+     unflattering percentage. The user was right on both counts: a
+     single screenshot can't prove a sustained problem is fixed, and the
+     perf overlay's own scrolling history *graph* (not just the
+     instantaneous number) is the thing to actually look at - a cropped,
+     upscaled capture of it showed a solid, unbroken row of red bars
+     across the entire sampled window, confirming genuinely sustained
+     100%, not a momentary spike.
+   - Root-caused via the same "disable one candidate loop, re-run the
+     identical soak test" technique already established elsewhere in
+     this project: the road's own "side of the road" checkered-
+     background loop draws a full 128-wide strip for ~30 rows every
+     frame, unconditionally, even though the road-scanning loop right
+     after it completely overdraws the center portion of nearly every
+     one of those same rows. A **first attempt at narrowing it introduced
+     a real, separate bug**, caught immediately by the user ("its also
+     drawing the sides of the road wrong during a turn"): it approximated
+     the road's position using a fixed margin bounded against the
+     *range* the road loop's own turnOffset could occupy that frame -
+     correct in that it never drew *into* the road, but it routinely
+     stopped short of the road's *real* per-row position (the road
+     loop's own local turnOffset decays toward 0 as y increases, down to
+     roughly 11% of its starting value by the bottom row, purely as a
+     within-frame visual effect) - leaving a genuine strip of screen
+     between the approximated margin and the real road edge that nothing
+     drew that frame. **Fixed properly**, not by reverting: merged the
+     background-shoulder drawing into the *same* per-row loop that
+     already computes the road's real (non-approximated) position for
+     that exact row, via a small precomputed `drvRowColourLocal[64]`
+     array replicating the original band-stepping/height-growth logic
+     per-row instead of per-band - the two can now never disagree, since
+     they read the exact same real value, not an estimate. Verified
+     against the exact same forced-hard-turn scenario (a temporary debug
+     hook setting `drvTurnOffset=47` directly, removed after) that had
+     reproduced the gap, confirmed clean on both a forced and a real,
+     organically-triggered in-game turn.
+   - A second, smaller real waste was found and fixed in the same pass
+     (re-checking the exact pixel overlap after the user's pushback,
+     rather than trusting an earlier "only 4px" dismissal): the
+     off-road background block is inset only 2px from each edge of the
+     solid-white road block drawn immediately after it, meaning the
+     road's own draw overdraws almost the *entire* off-road span, not a
+     small edge - fixed to only draw the two real 2px edge strips that
+     actually stay visible.
+   - A further round applied the same "measure a simple screen, not just
+     the busiest one" lesson to text drawing specifically, per a direct
+     follow-up request: a space character with no backfill is
+     *provably* a complete no-op (all 64 of its cells are guaranteed
+     blank) - added an early return skipping the whole 64-iteration scan
+     for that common case, plus hoisted two more per-row-constant
+     computations (`(line+row)*128+gcol`, `(py>>3)*128+x`) out of
+     `drvDrawChar()`'s own inner column loop, where they were being
+     redone on every one of 8 columns despite being constant for the
+     whole row.
+   - Verified via the perf overlay's own history graph (cropped and
+     upscaled 5x for readability, not just read as a single instantaneous
+     number) after the final round: visibly more green mixed through the
+     *entire* sampled window, not just the throttle-skip frames at one
+     edge - a real, measured improvement in sustained load, though CPU
+     still frequently reads at the clamped 100% ceiling during dense
+     scenes (multiple cars, mid-turn). Documented honestly rather than
+     claimed fully resolved: further reduction would need restructuring
+     the whole road scene into a per-page composite (matching the
+     technique already used for several other CPU-heavy games in this
+     project), a bigger and riskier change than this session's own
+     time budget allowed for - flagged as a real, understood, open item
+     rather than left unmentioned.
+
+Menu thumbnail added to `assets/thumbnails3.png`'s cell 5 (the 6th cell
+of its 4x2 grid, 2 free cells remaining) - `THUMBNAIL3_COUNT` bumped
+5->6. Verified via screenshot alongside the rest of this file's own
+verification passes that it displays correctly and a spot-checked
+neighbor is untouched.
+
+## DFlight - the second port from `BFlight`, optimizations applied proactively from the start
+
+Picked directly by the user ("port next game in that series") as the
+second of the 3 real games bundled in tonym128's own `BFlight` (after
+Road Rush/`driveGame`) - `bsideFly.cpp`/`.hpp`, the smaller of the two
+remaining candidates (583 vs `mazeRunner`+`mazeGenerator`'s own 729
+lines) and the first mini-game in the original chain (`Game=1`, before
+`driveGame`'s own `Game=2`). `mazeRunner`/`mazeGenerator` (a real
+procedural maze-navigation game) remains the one still-unported game
+left in this bundle.
+
+Menu title "DFLIGHT", the same "read the game's own in-source credit
+text" approach as Road Rush - the intro scroller's own literal
+" -= dFlight =-  " line. Credited "TONY M (TONYM128)", MCU "ESP8266" -
+same repo/author/hardware as Road Rush, not re-derived. A free-flight
+dodging game: steer a ship in all 4 directions through a field of
+scrolling cloud obstacles (upstream's own variable names call them
+"stars" despite the sprite art clearly being clouds), grazing one pushes
+the ship toward the bottom of the screen each tick rather than an
+instant kill - death only happens if that push carries you off the
+bottom edge, or you're already at the bottom when a graze starts - a
+real "you can still escape a graze" mechanic, preserved faithfully.
+
+**Every optimization lesson Road Rush needed a multi-round, occasionally
+blunt debugging saga to arrive at was applied here from the very first
+draft, not retrofitted after a report** - the user's own explicit
+instruction this time ("immediately apply the optimizations once you
+have ported it"). Every draw primitive writes directly into the
+framebuffer via inlined page/bit math (no separate `flySetPixel()` call
+layer in any hot path), `flyDisplayClear()` is a flat 1024-word buffer
+fill, and `flyDrawChar()` inlines its own font-data lookup with a
+hoisted per-row constant and an early return for a space glyph with no
+backfill - all copied forward directly from Road Rush's own final,
+already-proven state rather than re-derived from scratch. This game's
+own render model turned out to need less structural work than Road
+Rush's did in the first place: `drawObject()` only ever sets pixels
+where a sprite is nonzero, never touches the rest of the buffer, so
+there's no equivalent of Road Rush's own "one shape gets almost entirely
+overdrawn by another drawn right after it" pattern to guard against here
+at all.
+
+Same rendering foundation as Road Rush/Gilbert in the Downland/Tiny
+Arena (a real, pixel-addressable `bool[8192]` framebuffer upstream,
+converted to hardware page-bytes only at the very end of a frame by the
+real SSD1306Brzo library) - reproduced with the identical `int[1024]`
+page-byte-laid-out buffer. Font data table reused verbatim from Road
+Rush's own already-byte-diff-verified extraction of the same upstream
+`myfont.hpp` (no cross-game-file sharing mechanism exists in this
+project, so each game keeps its own self-contained copy, but there was
+no reason to re-run the extraction/verification a second time against
+already-proven-correct data).
+
+Not `tinyJoypadShim`/`obonoCoreShim` lineage - the same bespoke ESP8266
+hardware as Road Rush (`SSD1306Brzo` + a 6-discrete-button scheme) -
+needed no new shim. Unlike Road Rush's own backwards brake/accelerate
+mapping, this game's real upstream button wiring
+(`P1_Top/Bottom/Left/Right`) maps directly onto up/down/left/right with
+no remap needed - genuine 4-directional flight has no directional
+ambiguity to get backwards. `P2_Left/Right/Bottom` (kick/punch/jump) are
+read into the input struct but never actually consulted anywhere else in
+the real game logic - confirmed dead by grep, not wired to anything.
+
+A real, if inert-looking, rejection-sampling pattern in every one of
+upstream's own random rolls (`x = max+1; while(x>max) x = 1+rand()%max;`)
+was traced through rather than ported literally: the loop's own first
+(and by construction only ever) iteration already computes a value in
+`[1,max]`, so the `while` can never actually re-trigger - simplified to a
+direct `1 + arand(max)` call, the same "simplify a provably-equivalent
+construct" precedent already used for Wren Rollercoaster's own
+already-integer `floor()` calls.
+
+A genuine upstream oddity, preserved faithfully rather than "fixed":
+winning level 2 (`level` becomes 3) immediately truncates back down to
+`level = 2` and jumps straight to the outro scroller - the real level-3
+stage configuration defined in the scene dispatch (20 obstacles, higher
+velocity, a longer distance target) is dead code, never actually
+reachable through normal play. Kept exactly as upstream has it, matching
+Road Rush's own "Level 3" numbering quirk precedent from the same
+bundle - no clear signal either was ever meant to be reachable rather
+than intentional unused scaffolding. Scene 5 ("Crash") is declared in
+upstream's own scene-dispatch switch but no code path anywhere in the
+file ever actually sets `scene = 5` - confirmed dead by a full-file grep,
+not implemented (an empty case has no observable behavior to port).
+
+Upstream's own `restartFrameCounter` (the post-death wait before an
+automatic restart) is a genuine C++ in-class default member initializer
+(`= 100`), which - per this project's own already-established lesson
+from Tiny Gilbert's own `visible=1` bug - only ever runs once, at the
+point the single global `GameState` is constructed, not on every reset.
+Traced through the real consequence rather than assumed: nothing in
+upstream ever resets `restartFrameCounter` back to 100 on a fresh
+restart, only ever adds to it (`restartFrameCounter += frameCounter` on
+every death) - meaning the wait genuinely grows longer with every death
+across a whole session, never resetting. Ported faithfully: initialized
+once in `gameDFlight_init()`, never touched again anywhere else in the
+file.
+
+A genuine ~30fps whole-tick throttle (`FLY_TICK_DIVISOR = 60/30`) was
+applied from the start rather than discovered via a report, since this
+mini-game shares the exact same outer `game.cpp` loop (and its own real
+`updateMinTime(33)` cap) as Road Rush already proved needed one.
+Upstream's own post-death wait timer was already tick-counted natively
+(a plain integer comparison, no real-millisecond `checkTime()` call
+anywhere in this file at all, unlike Road Rush's own FLAG/LEVEL_SLIDER/
+WIN_LOSE states) - no real-time-to-tick conversion was needed at all for
+this port.
+
+A genuine attract/title screen was added (upstream has none, looping
+forever between intro/outro exactly like Road Rush's own upstream did) -
+matching this project's now-standard convention for every beyond-scope
+port with no native title gate.
+
+**Verified via Puppeteer, with the perf overlay active from the first
+test rather than added only after a report** - matching the user's own
+"immediately apply the optimizations" framing, this included checking
+the numbers, not just that the game ran: attract screen read 53% CPU
+(compared to Road Rush's own pre-optimization 83% on an equivalent
+plain-text screen - a real, direct confirmation the proactive fixes
+worked), the takeoff/level-slider screen read 32-38%, and sustained
+gameplay stayed comfortably low outside of one genuine, bounded,
+event-driven spike: a real screen-invert-plus-noise effect firing on
+obstacle collision (matching upstream's own real `displayNoise`/
+`displayInvert` combo) briefly reads a pegged 100% for that one frame,
+confirmed via the perf overlay's own scrolling history graph to recover
+immediately afterward (not a sustained problem, and the frame itself
+rendered completely, no truncation) - a legitimate, intentional visual
+effect cost rather than wasted overdraw, so left as-is rather than
+further optimized. Cloud spawning/scrolling was independently verified
+across several sampled frames per a direct user question, confirming
+obstacles spawn at the right edge, cross at a range of different speeds,
+and all 3 real size variants (10x4/20x6/30x11) appear correctly. A
+direct follow-up question about the clouds' own genuinely slow crossing
+speed (some taking up to ~85 real seconds to cross the screen at the
+slowest possible randomized velocity) was traced to the exact upstream
+formula and confirmed faithfully ported, not a rate-mismatch bug of the
+same class Tiny Arkanoid once had - the user chose to keep this exactly
+as upstream has it rather than compress the velocity range for a
+snappier feel.
+
+Menu thumbnail added to `assets/thumbnails3.png`'s cell 6 (the 7th cell
+of its 4x2 grid, now down to 1 free cell) - `THUMBNAIL3_COUNT` bumped
+6->7.
+
+## MRunnr - the third and last port from `BFlight`, closing out the bundle
+
+Ported from `more games/BFlight/mazeRunner.cpp`/`.hpp` +
+`mazeGenerator.cpp`/`.hpp` - the last real game in tonym128's own
+"BFlight" bundle (after Road Rush/driveGame and DFlight/bsideFly). A
+real, texture-mapped first-person maze crawler built on a genuine DDA
+raycaster (the classic lodev.org "flat" tutorial variant, credited
+directly in upstream's own header comment) - freshly generate a 25x25
+maze, race a 120-second countdown to reach a marked exit, with real
+64x64 brick-wall/"DefCon" exit textures sampled per-pixel rather than
+Tiny Arena's own simpler dithered-checkerboard approach. Menu title
+"MRUNNR" (README: "MRunnr"), lifted from the intro scroller's own credit
+line (" -= mRunnr =-  "), the same "read the game's own on-screen text"
+convention as every other BFlight port. Credited "TONYM128"/ESP8266,
+matching Road Rush/DFlight.
+
+**Plain floats replace every bit of upstream's own `FIXPOINT` 32.16
+fixed-point emulation** - Vircon32's real hardware floats make the whole
+`fixpoint.h` layer unnecessary, the same simplification already proven
+by Tiny Arena's own raycaster. `FIXP_MULT`/`FIXP_DIV` become `*`/`/`;
+`FIXP_FIXP_INT_PART` (mask off the fraction, stay in fixed units)
+becomes `floor()`; `FIXP_DEC_PART` (a two's-complement-correct `frac()`
+via a low-16-bits mask) becomes `x - floor(x)`, not a naive truncating
+subtraction; `FIXPOINT_SIN`/`FIXPOINT_COS` (upstream's own comment: "the
+loss of precision is extraordinary!") become real `sin()`/`cos()` calls.
+
+**A deliberate array-indexing unification, chosen specifically to avoid
+a transpose bug before ever writing the raycaster**: upstream's own
+`Maze` class stores `maze[y*WIDTH+x]` internally, but the *separate*
+`worldMap[WIDTH][HEIGHT]` the raycaster actually reads is accessed
+`worldMap[x][y]` - a real C 2D array whose own row-major layout is
+`x*HEIGHT+y`, genuinely different from `maze[]`'s own formula, needing
+upstream's own `copyMaze()` to swap x/y while copying. This port uses
+one single `[x+y*25]` convention for every maze-shaped array
+(`mzGen`/`mzWorld`/`mzTraversal`) - which happens to match upstream's
+own internal `maze[]` layout exactly (`y*WIDTH+x` == `x+y*25` when
+WIDTH==25), so `mzGenerateMaze()`/`mzCarveMaze()` port over with zero
+reindexing, and `mzWorld`'s own copy from `mzGen` becomes a trivial
+direct 625-word loop with no transpose risk at all.
+
+**The per-row wall-texture-Y division was replaced with the standard
+incremental technique, not reproduced literally**: upstream's own
+`display()` computes `texY` via *two* integer divisions on every row of
+every wall stripe, with its own inline comment admitting as much ("TODO:
+avoid the division to speed this up") - exactly the well-known
+lodev.org "flat"-vs-"textured" tutorial distinction, not a novel guess.
+Verified equivalent by direct derivation: since `texW==texH==64` here,
+upstream's own formula algebraically reduces to `texY =
+32*(2y-64+lineHeight)/lineHeight`, which is 0 at the unclamped top of a
+stripe and exactly `texH` at its unclamped bottom - the same two
+boundary conditions the incremental `step=texH/lineHeight;
+texPos=(drawStart-32+lineHeight/2)*step` technique produces by
+construction.
+
+**The uninitialized win/lose text buffer was fixed, not reproduced**:
+upstream's own `char fps[30];` followed by a *commented-out*
+`//sprintf(fps, "YOU WIN!");` and then a `strlen(fps)` read on the
+never-initialized buffer is clearly broken, dead code (real undefined
+behavior even on original hardware, not a deliberate quirk with an
+observable intended result). The commented-out `sprintf` calls make the
+intended text unambiguous, so this port draws "YOU WIN!"/"GAME OVER!"
+directly at the same positions instead of reproducing garbage - the same
+"fix clearly-broken-and-unintended upstream code, don't reproduce
+nondeterministic UB" precedent already used elsewhere in this project.
+
+**A second real upstream bug, this one NOT reproducible in this port at
+all rather than deliberately fixed**: the minimap's own "reveal the 3x3
+area right around the player" window uses `int mapX = int(posX);` - a
+bare C++ functional-style cast on the raw `FIXPOINT` (a scaled
+`int32_t`), with no `FIXP_TO_INT` unscale applied anywhere else in the
+file needs. On real hardware this leaves `mapX` in the hundreds-of-
+thousands range, so the window's own bounds check (`(mapX+i)>0 &&
+<mapWidth`) can never pass - the reveal window silently never activates,
+almost certainly an unintentional upstream typo/omission rather than a
+deliberate choice. Since this port's own `mzPosX`/`mzPosY` were never
+fixed-point-scaled to begin with, a plain `(int)mzPosX` cast here is
+simply *correct* - there's no way to "faithfully preserve" a bug that
+was purely an artifact of a representation this port doesn't use, so the
+reveal window works as evidently intended instead.
+
+Not `tinyJoypadShim`/`obonoCoreShim` lineage - genuine bespoke ESP8266
+hardware, the same `P1_Top/Bottom/Left/Right` mapping as Road Rush/
+DFlight (Up/Down move, Left/Right rotate), needing no new shim. `P2_Left`
+("open") and `P2_Top` (upstream's own "abandon and restart" gesture) are
+both confirmed dead by grep and left unwired, matching Road Rush/
+DFlight's own precedent of not duplicating this cartridge's existing
+Start-button quit dialog. Data tables (both 64x64 textures, plus font
+data reused verbatim from Road Rush/DFlight's own already-verified
+myfont.hpp extraction) extracted via a Python script.
+
+**Two real bugs found and fixed during this port's own first live
+verification pass, both self-caught rather than reported after
+shipping**: (1) `mzUpdateAttract()` checked for a Fire press but never
+actually called `mzDrawAttract()` on any ordinary tick (only
+`gameMazeRunner_forceRedraw()` did) - since `gameMazeRunner_init()` only
+clears the framebuffer once and never draws the attract text itself, the
+attract screen stayed permanently black until this was fixed to match
+DFlight's own `flyUpdateAttract()` shape (call the draw function every
+tick, not just on the state-exit transition). (2) The hand-transcribed
+`mzFontData` table (retyped by reading DFlight's own already-verified
+table through several `Read` calls rather than reusing the same script-
+extracted output already sitting in the scratchpad) was silently
+truncated to 116 of the required 192 lines - the array declaration's own
+`int[6144]` size didn't change, so the dialect zero-padded the missing
+values rather than erroring at compile time, producing readable-but-
+garbled text (correct pixels only for glyphs whose data happened to fall
+within the truncated range, blank/wrong pixels for the rest) rather than
+a build failure or a crash. Caught immediately from a live screenshot
+("MRUNNR" rendering as "M i l NN i") and fixed by diffing the broken
+table against DFlight's own extracted font data programmatically (not
+re-typing by hand a second time) and splicing in the verified-identical
+192-line version - the same "byte-diff transcribed tables, don't trust
+an eyeballed copy" lesson this project has hit repeatedly, here via a
+new failure mode (a partial `Read`-then-`Write` transcription silently
+truncating a large table, rather than a single mistyped value).
+
+**CPU optimization, applied proactively per direct user request the
+moment the port was playable, then confirmed necessary by the user's own
+live report of "100% when turning close to a wall"** - four real,
+verified-safe fixes, in order: (1) `mzCameraX[128]`, a table of
+`2.0*x/128.0-1.0` values precomputed once in `gameMazeRunner_init()`
+instead of recomputed as a fresh division every column, every frame -
+the value depends only on `x`, never on player state; (2)
+`floor(mzPosX)`/`floor(mzPosY)` hoisted to run once per frame instead of
+once per column, for the same reason; (3) the per-row framebuffer
+`idx`/`bit` computation (a multiply-by-128 and a shift-from-scratch
+every row) replaced with an incremental update - `bit` just left-shifts
+each row, only rolling `idx` into the next page once every 8 rows - plus
+`texSize*texY` replaced with `texY<<6` (texSize==64==2^6, a compile-
+time-constant power of 2); (4) the floor fill, originally one fixed
+128x32-pixel block drawn *before* the raycasting loop every frame,
+rewritten to fill only each column's own genuinely-uncovered rows
+(`[max(drawEnd,32), 63]`) *inside* the same loop, right after `drawEnd`
+is known - exactly zero floor pixels get drawn for a column whose wall
+stripe already reaches the bottom of the screen, the precise scenario
+the user's own "close to a wall" report described, and the same "don't
+draw a whole strip about to be completely overdrawn" lesson as Road
+Rush's own road-shoulder fix, just discovered per-column instead of
+per-row. Measured via the perf overlay's own history graph: ordinary
+corridor movement dropped from a sustained pegged 100% down to a mixed
+40-70% range; the single most extreme case (a wall filling nearly the
+entire 128x64 screen, maximum texture magnification, up to ~8000
+per-pixel writes in one frame) still reads 100%. Presented this ceiling
+to the user directly via AskUserQuestion (accept as documented / halve
+render resolution for a real fidelity trade-off / keep chasing smaller
+wins) rather than silently declaring it fixed or unilaterally
+restructuring the renderer - the user chose to accept it as a documented
+ceiling, the same call already made for Tiny Arena's own close-up-sprite
+case and Tiny Bert's ~70-76% baseline: this game does full 128x64
+resolution with real per-pixel texture sampling (4x the raw pixel count
+of Tiny Arena's own half-resolution dithered raycaster, which itself
+never dropped below ~97% in its own worst case even after two rounds of
+optimization), so a ceiling exactly at the ~8000-pixel extreme is
+consistent with, not surprising relative to, that existing precedent. No
+truncation (missing/cut-off content) was observed in any sampled
+close-up frame - the frames render completely, just consuming the full
+per-frame budget.
+
+Verified via Puppeteer: menu registration (page 3, alphabetized between
+Meteor Storm and Nohzdyve), the attract screen (post-fix), the intro
+scroller (apostrophes/lowercase rendering correctly, post-font-fix), the
+"Final Level" bars screen, and active gameplay (real texture-mapped
+brick corridors with correct converging perspective on both sampled DDA
+sides, movement, and rotation) all render correctly. Not independently
+forced this session: reaching the real exit marker (a win), the lose
+timeout, and the lose-scroller's own maze-regeneration restart path -
+all three reuse state-machine plumbing structurally identical to
+DFlight's/Road Rush's own already-proven transitions, so risk is low,
+but worth a direct check if anything looks off.
+
+Menu thumbnail added to `assets/thumbnails3.png`'s cell 7 - the 8th and
+last cell of its 4x2 grid, now completely full; the next new game's own
+thumbnail will need either a further grid-growth or a 4th texture,
+matching this project's own established precedent for when an atlas
+fills up. `THUMBNAIL3_COUNT` bumped 7->8. This closes out the BFlight
+bundle entirely - every real game in it (Road Rush, DFlight, MRunnr) has
+now shipped.
+
+## Asteroid - the fourth tonym128 port, resolving the game-asteroid/BFlight open question
+
+Ported from `more games/ESP8266GameOn/myGame.cpp`/`.hpp` - a genuinely
+different, OLDER repo than `BFlight` (tonym128's own README describes
+`BFlight` as the newer, consolidated successor) - picked directly by the
+user once this project's own remaining-candidates list was reviewed. A
+real Asteroids clone: rotate/thrust a ship, shoot rocks that split into
+smaller pieces, across 10 waves. This closes out this project's own
+long-standing open question (from the sixth beyond-scope discovery pass
+- see that section above) about whether "game-asteroid" survived into
+`BFlight`'s own newer game list - it did not; `ESP8266GameOn`'s own
+README states directly "You can see the Asteroids demo on the master
+branch," and the repo's own generic "write your own game here" file
+(`myGame.cpp`/`.hpp`) holds the Asteroids demo directly, on the already-
+cloned master branch - no further branch-fetching was ever needed. Menu
+title "ASTEROID" (matching the repo's own scroller text, " -= Asteroid
+=- "), credited "TONYM128"/ESP8266, matching Road Rush/DFlight/MRunnr.
+
+**A genuinely new rendering technique for this project**: every sprite
+(ship, all 3 asteroid sizes) is rendered via real per-pixel 2D image
+rotation (`astRotateObject()`, a direct port of upstream's own
+`rotateObject()`) - for each destination pixel, an inverse rotation
+matrix (real `sin()`/`cos()`, not the fixed-point polynomial
+approximation upstream's own `fixpoint.h` provides for non-Emscripten
+targets - Vircon32 has real hardware floats, matching the by-now-
+standard "fixpoint.h is unnecessary here" finding from Tiny Arena/
+MRunnr) locates the corresponding source pixel and nearest-neighbor-
+samples it. `FIXP_INT_PART`'s own right-shift (floor, not truncate-
+toward-zero, for a value that can be genuinely negative) is reproduced
+faithfully rather than with a plain `(int)` cast.
+
+**Two independent angle fields, ported as two independent fields**:
+`direction` (fixed at spawn for an asteroid, continuously player-steered
+for the ship - degrees, 0-360) drives *movement* via `xVec()`/`yVec()`;
+`rotation` (continuously increasing over time) drives *rendering* via
+`astRotateObject()`. `xVec()`/`yVec()` are themselves a deliberate
+piecewise-linear approximation of a circle (a diamond-shaped direction
+model), preserved exactly rather than "upgraded" to real trig despite
+this same file using real trig for sprite *rotation* just above - traced
+through by hand to confirm this is a deliberate, working design, not
+broken/dead code, matching this project's own "preserve a real,
+functioning, if unusual, choice" precedent. The player's own `rotation`
+field is similarly clamped to `[0,6]` (not `[0,2*pi]`) via an explicit
+bound check rather than a true modulo - ported exactly as upstream has
+it.
+
+Every genuine real-millisecond gate (`firetimeout`/`FIREPACING`,
+`scoreTimeMultiplier`/`SCORETIMEMULTTIMEOUT`, each asteroid's own
+continuously-growing `rotation = getTimeInMillis()/rotateAmount`) was
+converted to a frame-tick equivalent, matching the same conversion
+already established for Road Rush/DFlight/MRunnr - this repo shares the
+identical real `updateMinTime(33)` (~30fps) outer-loop cap (confirmed
+directly in its own `game.cpp`), so the same whole-tick
+`AST_TICK_DIVISOR` throttle applies here too.
+
+Not `tinyJoypadShim`/`obonoCoreShim` lineage - the same bespoke ESP8266
+hardware/button scheme as every other tonym128 port, needing no new
+shim. Both `P2_Right` (`a`, fire) and `P2_Left` (`b`, upstream's own
+secondary thrust alias) are real, live inputs, mapped onto
+`isFirePressed()`/`isFire2Pressed()` respectively - the first BFlight-
+family port in this project to actually need `isFire2Pressed()`
+(previously only used by Tiny Minez's own B-button flag toggle).
+`Alien10x10` (a declared-but-dead 10x10 alien sprite) confirmed dead by
+grep and dropped.
+
+**A genuine, load-bearing upstream quirk, preserved rather than
+"fixed"**: `initAttractMode()` does not zero the whole 90-slot asteroid
+array first, unlike `startLevel()`'s own explicit full clear - it only
+ever touches indices `0` through its own randomly-chosen demo count, so
+the attract screen can in principle show a few leftover asteroids from
+whatever session state preceded it (most visibly after a loss, since a
+game-over never clears the array either). Ported exactly as observed.
+
+**Three real bugs found via direct, live user reports during this port's
+own first playtest session, each fixed in turn**:
+1. *"splitting an asteroid is weird i see pieces briefly being drawn far
+   away from original position"* - a genuine bug. `astSpawnAsteroid()`
+   set the new piece's own float position (`astAstFixX`/`astAstFixY`)
+   correctly but never updated the INTEGER render/collision position
+   (`astAstX`/`astAstY`) - since this is a fixed-size 90-slot pool reused
+   across the whole session, a freshly-claimed slot's `astAstX`/`astAstY`
+   still held whatever screen position that slot's *previous* occupant
+   last had, and `astDisplayPlaying()` renders directly from
+   `astAstX`/`astAstY` (only refreshed from the float position a tick
+   later, inside `astUpdateAsteroidMovement()`) - so a newly-split
+   asteroid rendered at its stale predecessor's old position for exactly
+   one frame before snapping to the correct spot. **Fixed** by deriving
+   `astAstX`/`astAstY` immediately inside `astSpawnAsteroid()` itself,
+   using the identical wrap formula `astUpdateAsteroidMovement()` already
+   uses, closing the one-frame gap entirely.
+2. *"on lvl 3 cpu reaches 100%, find optimizations"* - investigated in
+   several rounds. First, a genuine, safe, always-correct win: 
+   `astDisplayPlaying()`/`astDisplayAttractMode()` were each calling
+   `astRotateObject()` (a full dimW*dimH pass sampling into a scratch
+   array) followed by `astDrawObjectWrap()` (a SECOND full dimW*dimH pass
+   reading that array and writing the framebuffer) for every visible
+   sprite, every frame - two complete sweeps over the same pixel grid
+   where one suffices. Fused into `astRotateAndDrawWrap()`, sampling the
+   rotated source and writing directly to the wrapped framebuffer
+   position in a single pass, used by both display paths (collision
+   detection still needs the separate array-producing form, since
+   `astMaskCollision()` compares two whole arrays). Second, `floor()`
+   itself (called twice per rotated pixel) was found to be a real ASM
+   subroutine (`math.h` defines it via an inline `asm{...}` block, not a
+   compiler intrinsic) - paying real per-call overhead on top of its own
+   instructions, the same "raw per-call overhead dominates without
+   v32opt's inlining" lesson this project has hit repeatedly elsewhere,
+   just via a math-library call this time. Inlined as a plain truncating
+   cast plus a conditional -1 adjustment for negative values, avoiding
+   the call entirely. Several attempts to *measure* the effect of these
+   fixes via a temporary debug hook (forcing a busy scene, disabling
+   collision so it would persist) ended up contaminated by the hook's own
+   side effects (clearing the asteroid array mid-session triggered a
+   false "level cleared" cascade upstream itself would also hit) rather
+   than by anything wrong with the fixes themselves - all debug hooks
+   were fully reverted (confirmed via grep) once that became clear, and a
+   direct follow-up user request to check text/UI rendering specifically
+   (rather than keep chasing the contaminated measurement) found one more
+   real, if small, inefficiency: `astDrawSliderBars()` (the level-slider/
+   game-over sliding-bar animation) iterated `frameCounter` times every
+   single call even though only the most recent 64 iterations ever draw
+   anything (a genuine sliding *window* effect, not a simple fill-up) -
+   fixed by computing the window's own bounds directly instead of
+   scanning down to them from frameCounter every time, removing the
+   wasted tail iterations once frameCounter exceeds 64. The character-
+   drawing functions themselves (`astDrawChar`/`astDrawString`) were
+   individually audited against every one of their ~20 call sites and
+   confirmed already efficient (each string is drawn once per frame, not
+   inside a per-pixel sweep) - not the source of the reported spike. The
+   exact remaining driver of the level-3 CPU report was not conclusively
+   isolated this session (a clean, side-effect-free reproduction was not
+   completed before time ran out) - flagged honestly as a real, open
+   follow-up rather than claimed fixed, though the fusion and floor()
+   fixes above are both real, unconditionally-safe improvements applied
+   regardless.
+3. A direct user question ("how far do bullets shoot?") was answered by
+   tracing the actual ported values rather than guessing: `life` starts
+   at 1000 and decrements by the fixed `AST_FPS`(30) each tick (replacing
+   upstream's own *measured*-FPS decrement, `fire[i].life -=
+   getCurrentFPS()` - this port has no equivalent live-measured value, and
+   the fixed nominal rate is what upstream's own moving-average counter
+   would settle on in steady state anyway), giving roughly 33 ticks
+   (~1.1 real seconds) of flight before a bullet expires - about a
+   quarter of the 128px-wide world at its own fixed unit speed, though a
+   bullet fired while the ship is drifting fast in the same direction
+   travels further, since it inherits the ship's own momentum at the
+   moment of firing (`FIREPOWER`, matching upstream exactly).
+
+Verified via Puppeteer throughout (both before and after every fix
+above): menu registration (page 1, alphabetized between Ardumania and
+Astro Barrier), the boot logo (a real 128x64 "Asteroid!" splash image,
+not text this port drew itself), the attract screen (floating demo
+asteroids + blinking "Press a button to start" + hi-score display), the
+intro scroller, the "Level N" slider, active gameplay (rotation, thrust,
+firing, the ship and asteroids all rendering correctly with the fused
+draw path), and the "Game Over" freeze-frame (confirmed the frozen
+collision-moment scene stays correctly visible underneath the overlaid
+text and slider bars, matching upstream's own `displayClear`-free scene-5
+body exactly - a bug caught and fixed by inspection before ever shipping,
+not by a report, once the equivalent pattern from `astUpdateLevelSlider()`
+was checked against the real upstream source rather than assumed
+identical). Every HUD/UI text string ("Scr N Lvl M", "Level N", "Game
+Over", the attract-screen prompts) was independently re-verified via a
+dedicated clean screenshot pass with the debug perf overlay hidden, after
+an initial ambiguous report turned out to be the overlay's own corner box
+visually covering the "Scr" prefix in those specific captures, not a
+real rendering defect.
+
+**A fourth texture needed for the thumbnail atlas**: `assets/
+thumbnails3.png` was already completely full (8/8 cells) going into this
+port - created `assets/thumbnails4.png` (a fresh 4x2 grid, matching every
+earlier atlas-exhaustion precedent), wired as texture id 5 (appended
+after `thumbnails3` in `rom.xml`, keeping every earlier texture id
+unchanged), with `THUMBNAILS4_TEXTURE_ID`/`THUMBNAIL4_COUNT` added
+alongside the existing three in `portVircon32.c`'s own dispatch chain.
+Asteroid's own thumbnail (ship + one asteroid + "Scr 0 Lvl 1" HUD, "BY
+TONYM128" credit) occupies cell 0; 7 cells of headroom remain. Verified
+via screenshot that it displays correctly and a spot-checked neighbor
+(Astro Barrier) is untouched.
+
+## Helicopter - the other real beyond-scope survivor, resolving its own open question
+
+Ported from `more games/Arduino-Game-System/GameSystem/helicopter.cpp`/
+`.h` - Finn Harms' own "Mini Arcade Gaming System" (a real ESP8266 D1
+Mini + 128x64 SSD1306 handheld with 8 built-in games, only one of which,
+Helicopter, was ever flagged as a genuinely new find rather than a
+duplicate of an already-shipped title). A classic "hold to fly" cave-
+dodging game - hold Up (or Right) to thrust upward against constant
+gravity, weaving through a smoothly, randomly varying cave silhouette.
+This resolves the last real open question left over from the sixth
+beyond-scope discovery pass (see that section above) - Helicopter had
+been flagged as "a weaker, unconfirmed find... likely a genre triplicate"
+of HollowSeeker/UFO, needing a real code-diff before committing either
+way, never done until now.
+
+**Confirmed genuinely distinct from both HollowSeeker and UFO by direct
+reading, not genre-name comparison** - see this game's own file header
+comment for the full argument: HollowSeeker moves its player by hopping
+between fixed ledge heights (never continuous gravity physics at all);
+UFO does use continuous hold-to-fly gravity physics, but its obstacles
+are discrete walls with a gap, separated by open clear space, not a
+continuous top-and-bottom cave boundary present at every x position the
+way Helicopter's own 32-segment cave array is. Helicopter is a real
+hybrid of the two shapes, with its own genuinely different smooth-random-
+walk cave-generation algorithm - a real, distinct codebase.
+
+Not `tinyJoypadShim`/`obonoCoreShim`/tonym128-family lineage - a THIRD
+wholly separate ESP8266 driver lineage for this project, using real
+`Adafruit_GFX`/`Adafruit_SSD1306` draw calls (`fillRect`/`drawLine`/
+`drawPixel`/`print`) rather than a raw byte-per-page stream or a
+`ScreenBuff`-style pixel array - all mapped directly onto this project's
+own already-proven inlined framebuffer primitives; no general Bresenham
+line algorithm was needed since the one real line this game ever draws
+(the rotor) is always horizontal. Font data reused verbatim from the
+already-verified myfont-family extraction (Road Rush/DFlight/MRunnr/
+Asteroid) - upstream itself has no bitmap font in source form at all
+(`Adafruit_GFX`'s own built-in font is compiled into the library, not
+present anywhere in this repo), so there was nothing font-specific to
+extract even if wanted.
+
+Credited "FINN HARMS" (the real name behind the GitHub handle "innif",
+confirmed via the repo's own git commit author rather than guessed from
+the handle), GPLv3 (confirmed via the repo's own real `LICENSE` file).
+
+**Real EEPROM high-score persistence restored** - confirmed via direct
+reading that `highscore.cpp`/`.h` genuinely wires each game's own score
+(keyed by a `GameID` enum) into a real magic-number-and-checksum-guarded
+EEPROM read/write, not dead scaffolding, matching this project's own
+established precedent of restoring genuinely-live upstream persistence.
+A plain 2-byte score via `eeprom_read_word`/`eeprom_write_word` at
+address 0, the same shape already used for 9+ other games.
+
+**Two real bugs found via direct, live user reports, both fixed**:
+1. A colon character (`:`) in the ported "Score: N"/"Best: N"/"FIRE:
+   Restart" UI text silently rendered as `!` instead - this project's own
+   shared myfont-family font-index table (reused across Road Rush/
+   DFlight/MRunnr/Asteroid/Helicopter) has no glyph mapped for `:` at
+   all, and this was the first port to ever actually try one in its own
+   UI text - every character index outside the mapped ranges falls back
+   to `!`'s own glyph. **Fixed** by dropping the colon from this game's
+   own UI text entirely ("Score N"/"Best N"/"FIRE TO RESTART") rather
+   than trying to locate and wire up an unused glyph slot in the shared
+   table - a plain, safe, cosmetic choice this port fully controls,
+   with no need to touch the shared font table other games already
+   depend on.
+2. *"during gameplay 100% cpu is reached"* - found and fixed in two
+   real rounds. First, a structural mistake in how this port initially
+   modeled upstream's own dual-rate timing: upstream's real ~33fps
+   internal physics gate is decoupled from the outer game-manager's own
+   faster ~60fps loop, which keeps redrawing every outer-loop iteration
+   regardless - a real, deliberate choice on real AVR-class hardware,
+   where redraw cost is comparatively cheap. This port's first draft
+   copied that shape literally (a "movement-only throttle, redraw at
+   native rate" pattern, matching Tiny Trick/Invaders/Pinball/Bert) -
+   but Helicopter has nothing that needs to keep animating smoothly
+   between throttled ticks the way those other games do (no independent
+   cosmetic counter of any kind - the cave offset, helicopter position,
+   and score are ALL only ever touched inside the one throttled step),
+   so the whole scene is provably identical on every "skipped" real
+   frame, making that shape pure waste here specifically. **Fixed** by
+   moving the tick-divisor gate to the top of `gameHelicopter_update()`
+   itself, so input, physics, *and* the redraw are all skipped together
+   on off-ticks - the same "gate everything, skip the whole tick" shape
+   used by the majority of throttled games in this project. Second, a
+   real structural rewrite of `heliFillRect()` itself: `heliDrawCave()`'s
+   own up to 64 `fillRect()` calls (32 segments x 2 walls each) can
+   together touch up to ~10,000 pixels in a single frame when the cave's
+   random walk produces a narrow gap (tall top+bottom walls) - genuinely
+   more raw pixel-writes than this project's own other dense scenes
+   (Asteroid's worst-case rotation load, MRunnr's own close-wall
+   raycaster case). The original per-row loop set each pixel's own bit
+   individually; rewritten to compute one bitmask per (column, hardware
+   page) instead - since these walls are tall, solid, single-color
+   rectangles, at most 8 masked-OR operations per column now produce the
+   exact same final bit pattern that used to take up to ~40 individual
+   per-row bit-sets. Verified via the perf overlay: CPU dropped from the
+   reported 100% to a 78% reading (itself likely still reflecting a
+   moving-average/history smoothing of the game's own genuinely busy
+   recent frames rather than a true instantaneous cost, matching this
+   project's own repeated finding that a `Game Over` screen showing a
+   residual high reading right after a busy scene isn't itself expensive).
+
+**A live-testing investigation that turned out not to be a bug at all**:
+early automated Puppeteer captures consistently died after just one
+scoring tick regardless of input timing (held from frame one, gentle
+taps, aggressive taps), which initially looked suspicious enough to
+suspect a deterministic RNG-seed bug (a bad cave layout that's
+unavoidable on literally every fresh game). Directly investigated by
+testing several consecutive in-session restarts rather than only fresh
+page loads - scores of 8 and 9 were reached on later attempts within the
+*same* browser session, proving the game's own difficulty genuinely
+varies run-to-run (consistent with `arand()`'s own global state
+advancing across restarts, not stuck on one fixed unlucky seed) - the
+automated test harness's own imprecise keyboard-timing simply isn't a
+reliable way to play a game this reflex-dependent, confirmed directly by
+the user's own live play ("the game runs fine now... it's not a bug...
+requires immediate gentle up taps to keep the helicopter afloat"). No
+code change resulted from this investigation - a real "verify before
+assuming a bug" case, the same discipline this project applies in the
+opposite direction (verifying before dismissing a real bug as
+intentional).
+
+Verified via Puppeteer throughout: menu registration (page 2, alphabetized
+between Gilbert in the Downland and HollowSeeker), the attract screen, and
+active gameplay across several sampled runs (cave scrolling, the
+helicopter's own rect+rotor+tail sprite, thrust/gravity physics, the
+score HUD, and the Game Over screen's Score/Best/"NEW HIGHSCORE!"/restart
+prompt) all render correctly. A genuine sustained multi-minute survival
+run (to visually confirm the cave's own random-walk generation stays
+well-formed far beyond the ~10-30-tick range this session's own testing
+reached) was not attempted - worth a direct check if anything looks off
+at a much later point in a long run.
+
+**A genuine gameplay improvement, added on direct user request rather
+than found as a bug**: entering `HELI_STATE_PLAY` now holds the very
+first gameplay frame (the freshly-generated starting cave layout, the
+helicopter at rest in its centered starting position) for a full real
+second (`HELI_READY_TICKS = 30`, matching the throttled ~30fps tick
+rate already established above) before gravity/physics/collision
+actually begin - `heliUpdatePlay()` renders-only and returns early while
+`heliReadyTicks > 0`, only calling `heliUpdatePlaying()` once that
+countdown reaches zero. Upstream has no equivalent - this is a pure,
+deliberate addition, not a fidelity restoration - giving the player a
+moment to see the starting layout before the (frequently punishing,
+tap-precision-dependent) descent begins, rather than falling immediately
+on the very first tick after leaving the attract screen. Verified via a
+timed Puppeteer screenshot sequence (100ms/500ms/1000ms/1300ms after
+starting play) confirming the frame stays visually static through the
+first ~1 second before physics visibly begins, and confirmed directly
+by the user's own live play.
+
+Menu thumbnail added to `assets/thumbnails4.png`'s cell 1 (right after
+Asteroid's own cell 0). A live in-flight gameplay screenshot proved
+impractical to capture reliably via this project's own automated
+Puppeteer input (the same reflex-dependent-timing issue documented
+above) - the user supplied a real capture from their own live play
+instead (via the native desktop emulator's own `Screenshots/` folder,
+not the WebGL harness), showing the cave silhouette and the helicopter
+sprite mid-flight, used for both the thumbnail and the README/metadata
+screenshot. Verified via screenshot that it displays correctly and a
+spot-checked neighbor thumbnail (a different atlas entirely, Gilbert in
+the Downland) is untouched.
+
+## Car Race - the last real survivor of the sixth beyond-scope discovery pass
+
+Ported from `more games/Esp8266OledGame/src/CarRaceGame.h`/`.cpp`
+(hoangminh5210119) - closes out the whole sixth discovery pass (Road
+Rush/DFlight/MRunnr, Asteroid, Helicopter, and now this one - see that
+section's own intro further above). License: "None specified" - no
+LICENSE file anywhere in the repo root, its own README.md (Vietnamese-
+language, no license section), or `CarRaceGame.h`/`.cpp` themselves;
+only two bundled third-party libraries (SimpleButton, SSD1306) carry
+their own separate license files, neither covering this game's own code.
+Credited "HOANGMINH5210119" in the menu (the repo owner's own GitHub
+handle, no real name stated anywhere) - the same "known-but-unstated-
+license, credit the real handle rather than UNKNOWN" treatment already
+used for Datacute/Sunpazed.
+
+A top-down, fixed-position lane-dodging traffic racer: the player's car
+sits at a fixed X near the left edge, switching between 4 horizontal
+lanes to dodge 3 independently-scrolling enemy cars while a scrolling
+road-marking pattern sells the sense of forward motion - structurally
+distinct from Road Rush's own pseudo-3D perspective racer (a different
+bundle/author entirely), confirmed by direct reading before committing
+to port it, not assumed from the shared "driving game" genre. The
+repo's other 3 games (FlappyBirdGame/PongGame/TRexGame) were confirmed
+via a quick read to be genre-duplicates of already-shipped titles
+(Flappy Bird/Pipe Bird, Bat Bonanza/Laser Pong, Dino Game respectively)
+and were not ported.
+
+Real hardware confirmed via `lib/OledMenu/A_config.h` (the file actually
+compiled - `src/A_config.h` is a dead, entirely-commented-out
+placeholder, checked directly rather than assumed): an SH1106 128x64
+OLED (this project's own standing "functionally equivalent to SSD1306"
+treatment applies) and exactly 3 real buttons (Up/Down/A, no dedicated
+second fire button). Not `tinyJoypadShim`/`obonoCoreShim` lineage -
+needed no new shim. `moveCar()`'s own `DIRRIGHT`/`DIRLEFT` naming is a
+real, if confusing, upstream artifact - traced through by hand rather
+than assumed: `DIRRIGHT` is wired to the Up button and moves the car
+toward lane 0 (the top of the screen); `DIRLEFT` is wired to Down and
+moves it toward lane 3 (the bottom) - a plain, intuitive up/down mapping
+once actually followed through, nothing to remap. `isFirePressed()`
+covers the "press any key" attract-screen dismissal/restart gesture
+(matched to Button A, upstream's own third button, which otherwise only
+triggers an exit-confirmation dialog this project's own Start-button
+quit dialog already supersedes).
+
+**A new packed-bitmap data format for this project**: every sprite here
+(`CARSPRITE`/`ENEMY0`/`ENEMY1`/`ENEMY2`/`CRASH`) is real XBM-packed data
+(LSB-first bit order, `ceil(width/8)` bytes per row), unlike every prior
+port's own pre-unpacked "1 int per pixel" bool arrays. Confirmed the
+exact unpacking convention by reading `OLEDDisplay.cpp`'s own real
+`drawXbm()` implementation directly rather than assuming a byte order -
+standard LSB-first XBM. Unpacked offline via a small Python script into
+flat pixel arrays matching this project's own established convention,
+verified by byte count before use (`CARSPRITE`/`ENEMY0`/`ENEMY1`/
+`ENEMY2` each confirmed 60 bytes = 4 bytes/row x 15 rows for a 30x15
+sprite; `CRASH` confirmed 1024 bytes = 16 bytes/row x 64 rows for the
+full 128x64 splash image) - not hand-retyped, per this project's own
+long-standing anti-transcription-bug discipline.
+
+Font: upstream's own real font table does exist in this repo's own
+source (`lib/SSD1306/src/OLEDDisplayFonts.h`'s `ArialMT_Plain_10`,
+checked directly) - but it's a genuinely different, proportional-width
+bitmap-font format (a run-length jump table keyed by ASCII code,
+variable glyph widths) than this project's own established fixed-width
+8x8-cell "myfont" family, and the only text this game ever draws (a
+plain numeric score, "High Score: N", "Reckless"/"Racer"/"press any
+key", "GAME OVER") needs no proportional-width rendering to read
+correctly. Reused the already-verified myfont-family font table verbatim
+instead (matching Helicopter's own precedent) rather than parsing a
+second, more complex font format for zero real gameplay/fidelity
+benefit.
+
+**The real, single genuine timing driver upstream has**:
+`updateSpeed()`'s own `millis()`-gated ~200ms internal throttle (the
+only place road/enemy positions, score, and difficulty actually change -
+`moveCar()`'s own lane switch is a plain edge-triggered event with no
+real-time pacing of its own, driven by the Button library's real-
+hardware click/debounce logic, which this project's own standing "drop
+real-hardware debounce, use edge-detection" precedent already covers).
+Ported as a genuine whole-tick throttle, `CR_TICK_DIVISOR = 12` (60/12 =
+5 ticks/sec, matching 200ms exactly).
+
+Upstream's own two-screen intro sequence (a boot-time `splashScreen()` -
+the `CRASH` image held for a real, blocking 2000ms - followed by the
+real interactive `waitForPress()` title screen) is preserved as two
+distinct states, `CR_STATE_SPLASH` then `CR_STATE_TITLE` - matching a
+real, deliberate upstream structural quirk traced through the actual
+control flow rather than assumed: `gameOver()` calls `restartGame()`
+then `waitForPress()` directly, *skipping* `splashScreen()` entirely on
+every replay - only the very first entry into the game ever shows the
+crash-image splash. Reproduced exactly: `crBeginGameOver()`'s own
+fire-press branch transitions straight to `CR_STATE_TITLE`, bypassing
+`CR_STATE_SPLASH`.
+
+No real EEPROM usage exists anywhere in this game's own source
+(confirmed via a direct grep - no `<EEPROM.h>` include, no `eeprom_*`
+call) - `highScore` is upstream's own plain in-memory `long`, reset
+every real power-cycle. Initially left session-local only at ship time,
+matching this project's own precedent for other beyond-scope ports with
+no genuine upstream persistence to restore (Meteor Storm, Flappy Bird).
+
+**Real EEPROM persistence added shortly after, at direct user request**
+("when i play the game and have a highscore and then reset the vircon32
+console it does not display the previous highscore anymore... does it
+perhaps set it to 0 somewhere") - traced by inspection to
+`gameCarRace_init()`'s own unconditional `crHighScore = 0;`, confirming
+the reported symptom exactly and that it was working as originally
+built, not a bug. Given this project's own established precedent of
+adding persistence as a deliberate extension beyond upstream when asked
+(Helicopter, Nohzdyve, Tiny Bert), the user confirmed they wanted it
+added rather than kept faithfully session-only. Wired the same "simple
+2-byte score" shape used for 9+ other games: `gameCarRace_init()` now
+loads via `eeprom_read_word(0)` (with the standard 65535 virgin-slot
+guard) instead of hardcoding 0, and `crRestartGame()`'s own existing
+`if(crScore>=crHighScore)` check (upstream's single real "is this a new
+high score" comparison, reused unchanged) now also writes through via
+`eeprom_write_word(0, crHighScore)` - covers both the very first game
+and every real post-crash restart, since `restartGame()` upstream is
+already called from both. Verified by code inspection only, per the
+user's own earlier "check it in code" instruction for this file, and a
+clean rebuild (`BUILD SUCCESSFUL`) - not re-tested in the emulator.
+
+`randomPosX()` is declared and defined upstream but never actually
+called anywhere in the file (confirmed by grep) - dead code, not
+ported. `checkCarPostion()` is declared but never defined or called
+anywhere either - also dropped.
+
+**Two rounds of CPU optimization, both applied per direct, repeated user
+push to keep checking rather than accepting a first-pass "looks fine"
+reading**:
+
+1. `crFillRect()` (the road-marking rectangles, up to 15/tick) and
+   `crDrawXbm()` (every sprite) were both hoisting-eligible from the
+   start: `crFillRect()`'s original per-page bitmask (a shift/subtract/
+   shift chain) was recomputed inside the per-column loop even though it
+   only ever depends on the rectangle's own y/h and the page index,
+   never the column - fixed by precomputing each overlapping page's mask
+   once before the column loop starts, cutting the hot inner loop to a
+   plain array lookup + OR. `crDrawXbm()`'s own `row*w` index term was
+   similarly recomputed on every column - hoisted to once per row. Both
+   are the same "hoist row/rect-invariant work out of the inner loop"
+   lesson already applied project-wide (Nohzdyve, TinY Fi, MRunnr, etc).
+
+2. **A real, structural gap found via direct user report** ("the car
+   race game is still redrawing its title screen while it's not dirty"),
+   after an initial dirty-flag cache had already been added to the title
+   screen (`crTitleDirty`, gating `crDrawTitle()` itself). That first
+   pass only skipped the *CPU-side pixel-touching* work - it left
+   `crRenderFrame()`'s own 1024 `md_drawColumn()` GPU blit calls firing
+   unconditionally every throttled tick regardless of whether
+   `crDrawTitle()` actually ran, which measured at 51% CPU for the one
+   tick that does real work (well under the 100% truncation-risk
+   ceiling, but genuine waste on every subsequent ~200ms tick spent
+   idling on an unchanging screen). Fixed by moving `crRenderFrame()`
+   inside each dirty-gated block itself (so it only runs the one tick
+   that actually redrew the buffer) rather than calling it unconditionally
+   from the dispatcher - required relocating `crRenderFrame()`'s own
+   definition earlier in the file, since this dialect requires a
+   function to be defined before its first call site. Applied the exact
+   same treatment proactively to the other two genuinely indefinite-wait
+   static screens in the same pass (`crSplashDirty`/`crGameOverDirty` for
+   the boot splash and the crash freeze-frame/"GAME OVER" screen) rather
+   than leaving the fix half-applied to just the one screen that got
+   reported - all three are "hold until the player does something, never
+   changes while waiting" states, the same category. `gameCarRace_
+   forceRedraw()` (the quit-dialog onResume hook) draws every branch
+   unconditionally regardless of its own state's dirty flag (a dialog
+   resume must always force a real redraw) and explicitly clears that
+   flag afterward, so cancelling the dialog doesn't leave a stale dirty
+   flag that would cause one redundant extra redraw on the next real
+   tick - confirmed correct by direct code tracing per the user's own
+   explicit "check it in code" instruction for this whole round, not
+   verified via the emulator.
+
+**A real input-reliability bug found while investigating the above,
+also via code inspection**: the fire-press/lane-switch reads were
+originally a plain single-frame edge/level check
+(`isFirePressed()`/`isUpPressed()`/`isDownPressed()`, sampled once per
+throttled ~200ms tick) - Puppeteer testing showed a 100ms test-harness
+key press could land entirely between two throttled samples and be
+silently dropped, exactly the risk this project's own
+`md_recentlyPressed()` helper exists to close (see
+`machineDependent.h`'s own comment on this exact class of bug). Fixed by
+switching all three inputs to
+`md_recentlyPressed( md_input*Frames(), CR_TICK_DIVISOR )` - "was the
+button pressed at any point since the last throttled tick ran," not
+just "is it down on this exact sampled frame" - removing the now-
+redundant `crPrevFire` edge-tracking variable entirely.
+
+Verified via Puppeteer before the "stop playtesting" instruction landed:
+menu registration (alphabetized between Breakout and DFlight), the
+splash screen (CRASH image rendering correctly, confirming the XBM
+unpacking), the title screen (car sprite, both text lines, high score),
+and active gameplay (car switching lanes, road scrolling, score
+climbing, both enemy car variants rendering correctly on screen
+simultaneously). The dirty-flag/render-hoisting fixes and the
+`md_recentlyPressed()` input fix were both made and verified via direct
+code tracing only afterward, per explicit user instruction, and compile
+clean (`BUILD SUCCESSFUL`, `SKIP_V32OPT=1`) - not re-verified in the
+emulator. A genuine crash/game-over/high-score-persisting-across-a-
+restart cycle was not independently forced in this session either way -
+the logic is a direct, unmodified port of upstream's own already-traced
+`detectCrash()`/`restartGame()` control flow, so risk is low, but worth
+a direct check if anything looks off.
+
+Menu thumbnail: `assets/thumbnails4.png`'s 4x2 grid still had 6 free
+cells after Asteroid/Helicopter (cells 0-1) - composited into cell 2. A
+real gameplay screenshot (both enemy car sprite variants visible
+onscreen simultaneously, player car in lane 0, score 36) was captured
+via Puppeteer, cropped to the 640x320 game area and downscaled to
+256x128, matching the established pipeline.
+
+## A seventh discovery pass — searching by driver-header filename instead of genre name
+
+Once Car Race closed out the sixth beyond-scope discovery pass, the user
+asked for a genuinely different search strategy: rather than searching
+by genre/game name, enumerate the actual `#include` driver-header
+filenames already used across every game staged in `more games/`
+(`FastTinyDriver.h`, `ssd1306xled.h`, `tinyJoypadUtils.h`, `ELECTROLIB.h`,
+`Tiny4kOLED.h`, `oled85.h`, `SSD1306Wire.h`/`SH1106Wire.h`, etc - a real
+grep across every top-level `.ino`/game source in the folder, not
+internal library plumbing) and search for those specific filenames
+instead of a genre name or game title. The reasoning: any repo using the
+exact same driver almost certainly targets the same ATtiny85/ESP8266/
+ESP8285 + SSD1306/SH1106 128x64-shaped hardware this whole project
+targets, a narrower and more direct signal than genre-name search terms
+that mostly return genre-alike hits on totally different hardware.
+
+**Real tool limitation, disclosed rather than glossed over**: GitHub's
+own code-search API now requires authentication for any query
+(confirmed directly - an unauthenticated `filename:` query returns a
+plain 401), which this session doesn't have. The search leaned on plain
+web search plus direct repo/file reads instead - real, but not an
+exhaustive substitute for true GitHub code search, so "nothing else
+found" here means "nothing else turned up via this approach," not "the
+full space was searched."
+
+**Checked GitHub's own `tinyjoypad` topic page first** (11 repos) - all
+11 were already fully known: already-shipped source repos (`Yevgeniy-
+Olexandrenko/tiny-handheld`, `Lorandil/Tiny-invaders-v4.2`, `Lorandil/
+TinyDungeon`, `obono/TinyJoypadWorks`, `Lorandil/TinyMinez`), already-
+excluded non-game/hardware repos (`wagiminator/CH32V003-GameConsole` -
+RISC-V, `orzel/sygeco` - launcher-only, `Lorandil/ATTiny85-optimization-
+guide` - a guide, not a game), a pure dev-framework repo with no bundled
+games (`Lorandil/Cross-Development-for-TinyJoypad`, confirmed by direct
+read - "only infrastructure for developers to create their own"), and
+this project's own two sibling repos (`joyrider3774/Tinyjoypad_SDL`,
+`joyrider3774/tinyjoypad_vircon32` itself).
+
+**Several more leads checked and ruled out, each via direct reading
+rather than a title/summary alone**: `y-fujimoto1009/tinyjoypad` (a pure
+hardware-kit repo, pre-loaded with the already-known Tiny Invaders, no
+original game); `cultsauce/SnakeGame85` (confirmed a fork of the
+already-shipped `terezaza/SnakeGame85`, not a new game - the "wiresauce"/
+"gatoninja236" Hackster.io Snake write-ups that surfaced alongside it
+trace back to the same lineage or to dead/inaccessible links);
+`datacute/Tiny4kOLED`'s own bundled `examples/PacMan/PacMan.ino` (read
+in full - a real, if incomplete, prototype: no ghost AI, no collision
+detection, the author's own code comments admit the gaps directly -
+matches this project's own established "unfinished stub" exclusion
+category, the same one `pakozm/TinyGames`'s own "Parachute" folder hit
+earlier); several generic driver-library mirror repos that a plain
+`SSD1306Wire.h`/`SH1106Wire.h` search surfaces (ThingPulse/RadioShuttle/
+LilyGO/Wemos forks of the same base ESP8266 OLED library) - libraries
+themselves, not games built on them.
+
+**One genuine, real find**, via a `"FastTinyDriver.h" github` search
+that surfaced an unrelated Hack Club "Summer of Making" student devlog
+mentioning the driver by name - traced through to a real repo,
+`github.com/RobotMasterC/TinyTetris`, once actually followed rather than
+taken at the devlog summary's own word (which, per the search AI's own
+first-pass description, wrongly suggested it was FastTinyDriver-based -
+reading the real source directly showed it's actually built on
+`Tiny4kOLED.h`, the same library already used by TinyBullsAndCows/ATtiny
+Tetromino, not FastTinyDriver at all). See its own writeup, "Tiny
+Blocks," immediately below.
+
+This closes out the seventh discovery pass - the driver-header search
+approach itself turned up one real, portable game plus a large amount of
+already-known/already-excluded territory re-confirmed from a different
+angle, a useful cross-check even without full GitHub code-search access.
+
+## Tiny Blocks — found via the driver-header search, a 4th Tetris-genre game shipped on direct user approval
+
+Ported from `github.com/RobotMasterC/TinyTetris` (credited "ROBOTMASTERC"
+in the menu - the repo owner's own GitHub handle, no real name given
+anywhere; license "None specified", confirmed via the GitHub API itself
+returning `"license": null` and no LICENSE file in the repo). **The menu
+title, this file's own name, and every mention in this project's own
+documentation deliberately avoid the trademarked genre name the upstream
+repo is itself titled after** ("TinyTetris") - the same treatment
+already applied to Falling Blocks and Blocks Gold, extended here to a
+3rd instance. Unlike those two, this game's own code never draws that
+word (or any text at all) on screen - confirmed by reading the full
+source, no font/string-drawing call exists anywhere in it - so there was
+no on-screen string needing a rename, only the repo/file/menu naming.
+
+**A real ATtiny85 + 128x32 I2C OLED + 3-button game, built on
+`Tiny4kOLED.h`** (the same datacute library already used by
+TinyBullsAndCows and ATtiny Tetromino) - confirmed via a full read of
+the real 457-line source (fetched directly via `curl`, not summarized)
+to be a genuinely independent, complete, playable implementation: its
+own from-scratch piece table, its own bit-packed board representation,
+its own rotation/wall-kick logic, its own level/line-clear system -
+sharing no code with any of this project's other 3 already-shipped
+Tetris-genre games (Falling Blocks/Blocks Gold, both Andy-Jackson-
+lineage; ATtiny Tetromino, sunpazed/jfoucher-lineage). A 4th entry in an
+already-well-covered genre, shipped specifically because the user
+reviewed this exact distinction (real independent codebase, plus the
+genuinely unique control scheme described below) and confirmed it was
+worth porting rather than skipping on genre-saturation grounds alone.
+
+**The board is genuinely rendered rotated 90 degrees from a normal top-
+down view - the identical structural shape already solved for ATtiny
+Tetromino** (itself also a 128x32/`Tiny4kOLED`-family game). Traced the
+real byte layout directly from `drawBoard()`/`drawNext()` rather than
+assumed: the board's own Y axis (gravity, `current.y`, 32 rows tall)
+maps to real screen COLUMNS (each logical row occupies 3 consecutive
+physical columns, starting at physical column 31), while the board's own
+X axis (native left/right, `current.x`) maps to real screen PAGE+BIT
+position (`screenX = col*3-2`, split into `page=screenX/8`/
+`bit=screenX%8`). On an unrotated Vircon32 screen this means a piece
+genuinely falls LEFT-TO-RIGHT across the screen, and upstream's own
+`LEFT_BTN`/`RIGHT_BTN` (which decrement/increment `current.x`) visually
+move a piece UP/DOWN, not left/right.
+
+**Controls were deliberately remapped to match what the player actually
+sees, directly reusing ATtiny Tetromino's own already-proven solution to
+the identical rotation** rather than re-deriving a new scheme: Up/Down
+trigger upstream's own `LEFT_BTN`/`RIGHT_BTN` logic respectively (since
+that's what visually moves the piece up/down on this unrotated screen),
+Fire rotates, and Left/Right both trigger a fast-drop gesture (matching
+ATtiny Tetromino's own "Left/Right both soft-drop" choice for the same
+reason - no single obviously-correct button for accelerating a
+sideways-visual fall). That fast-drop gesture itself is a real, if
+genuinely unusual, port decision: upstream reads `analogRead(0) < 950`
+directly, on a pin with no button ever configured for it anywhere in the
+file (the BOM states only 3 physical buttons) - read literally as a real
+"hold to drop faster" gesture wired to *something* in the real hardware
+(unclear from the repo alone exactly what), rather than dropped as
+inert.
+
+**Upstream's own bit-packed board (`boardPixels`, 1 bit per cell) was
+ported as a plain `int[32][16]` grid instead** (`tnbBoard`), matching
+this project's now well-established precedent for every prior
+TinyTetris-family bit-packed board (Falling Blocks' `bool[10][24]`,
+ATtiny Tetromino's `bool[16][24]`) - no benefit to bit-packing on
+Vircon32, and it sidesteps needing to separately re-verify whether this
+specific packing scheme carries any of the AVR-implicit-shift risks
+already documented extensively elsewhere in this project.
+
+A genuine, faithfully-preserved upstream rendering quirk, not
+"corrected": `drawBoard()` only ever draws the LEFT border of the
+playfield as a real visible line - the RIGHT border (upstream's own
+`col >= 11` cells, 5 columns wide, real solid collision-active board
+data) is never rendered at all, just invisible. Ported exactly as
+observed: the right wall still stops pieces correctly, nothing is drawn
+there.
+
+Upstream's own 7-piece bag-pick trick (`nextId = random(8); if
+(nextId==7) nextId = random(7);`, with a fuller `... || nextId==
+current.id ...` variant at the mid-game refill site) was ported verbatim
+via the shared `arand()` helper rather than simplified to a direct
+`arand(7)` - preserves upstream's own real distribution technique
+exactly, including that the two call sites use genuinely different
+conditions.
+
+Real `millis()`-gated timers (a 100ms move-repeat cooldown, a 150ms
+rotate-repeat cooldown, and a full per-level `fallDelay` table spanning
+10ms-720ms) were converted to plain frame-counted equivalents at 60fps
+rather than an accumulator - exact real-time correspondence isn't
+critical for these arbitrary hobby-project tuning values, and a plain
+frame-count comparison is simpler and lower-risk than porting a real-
+millisecond timer model. The fastest tiers (10ms/20ms) both round down
+to a 1-frame minimum, the fastest this engine's own tick rate can
+represent regardless - still functionally "drops every tick," matching
+upstream's own near-instant intent at those extremes.
+
+**A ternary operator, caught and fixed before ever compiling, not by a
+build error**: an early draft of `tnbInitBoard()`'s own border-cell
+initialization used `tnbBoard[row][col] = (condition) ? 1 : 0;` - this
+dialect has no ternary support (a well-documented restriction throughout
+this project) - caught via a project-wide grep for `?` before the first
+build attempt and rewritten as a plain `if`/`else` assignment. The build
+compiled clean on the very first real attempt afterward.
+
+No score exists in this game at all (only `linesCount`/`gameLevel`,
+confirmed via the full source read - no `score` variable anywhere) and
+no EEPROM usage exists upstream either - left fully session-only,
+matching this project's own precedent for other beyond-scope ports with
+nothing meaningful to persist. Directly asked by the user ("does it have
+a score display?") whether to add a live in-game lines/level HUD beyond
+the Game-Over-only summary this port shipped with - declined, keeping it
+matched to upstream's own real "no in-game display at all" behavior.
+
+A genuine attract screen and a real game-over screen (with a restart
+gesture) were added - upstream has neither: it starts playing
+immediately from `setup()`, and its own real game-over path is a literal
+AVR `sleep_mode()` call with no wake/restart path other than a hardware
+reset, which has no meaningful equivalent here. Both new screens stay
+confined to the same physical pages 0-3 (32 rows) the real gameplay
+itself occupies, for visual consistency - pages 4-7 are implicitly left
+blank every frame (the shared `tnbDisplayClear()` call already zeroes
+the whole buffer, and nothing ever writes into those pages), the same
+"confine everything to the game's own real physical footprint" approach
+already used for ATtiny Tetromino/Tiny Bulls And Cows/Laser Pong.
+
+A 30fps whole-tick throttle was added afterward at direct user request
+("limit game to 30 fps") - upstream has no genuine fixed real-time rate
+of its own (every one of its own gates is a real-millisecond threshold,
+already ported as frame-counted equivalents assuming a 60fps tick - see
+above), so this is a deliberate slowdown, not a restored original rate.
+Gates the whole tick (input, game logic, and the redraw together),
+matching this project's own generally-preferred "gate everything" shape.
+Every existing frame-counted constant in the file (`TNB_MOVE_COOLDOWN`,
+`TNB_ROTATE_COOLDOWN`, the whole `tnbFallDelayFrames()` table) was
+deliberately left unrescaled, matching this project's own standing "one
+divisor, no dual bookkeeping" practice - they simply now take twice as
+long in real time.
+
+**A duplicate found and correctly excluded during this same session, via
+a direct user-supplied link rather than this project's own search**:
+`CircuitoMaker/Attiny-Arcade`'s own `Games/PAREDAO/PAREDAO.ino` (a
+Portuguese-language-commented Breakout/Arkanoid clone, "Circuito Maker"
+branding on its own title screen) - confirmed via direct comparison
+against the already-shipped Breakout's real source
+(`more games/gametiny/UFO_Breakout_Arduino/UFO_Breakout_Arduino.ino`) to
+share identical variable names (`player`/`platformWidth`/`ballx`/
+`bally`), identical initial values, and the exact same `collisionCheck:`/
+`goto collisionCheck` control-flow structure - a renamed/rebranded copy
+of Ilya Titov's own already-ported code, not an independent
+implementation. Not staged, not ported.
+
+Verified via a light Puppeteer sanity pass (menu registration on page 5,
+credited "BY ROBOTMASTERC"; the attract screen; active gameplay across
+an extended session - piece movement in both directions confirmed
+visually moving the piece up/down on screen as intended by the control
+remap, a Fire-triggered rotation with no crash, an extended fast-drop
+hold producing multiple real locked/stacked pieces against the right
+wall with a fresh piece correctly spawning after each lock) per this
+project's own now-standard lighter per-port verification approach - not
+an exhaustive playthrough (line-clearing and the game-over transition
+were not independently forced this session, though both reuse logic
+paths structurally identical to already-verified sibling code, so risk
+is low). Menu thumbnail composited into `assets/thumbnails4.png`'s
+cell 3 (the next free cell after Car Race's own cell 2) from a real
+gameplay screenshot showing multiple locked pieces stacked against the
+right wall.
+
+## Menu thumbnails and README/metadata backfilled for the whole Cate-engine batch
+
+The 22-game "Cate engine" batch (Cracky, ported first as the reference
+implementation, plus the 21-game `AERIAL`..`YEWDOW` parallel-agent batch -
+see "Cracky, and a whole new source family" above) had shipped without
+ever getting the standing per-port menu-thumbnail/README/metadata
+treatment every other game in this project gets - a real backlog, not
+something each individual port or its own porting agent was ever asked to
+handle at the time. Closed out in one pass, on direct request ("create
+(ingame) thumbnails for the new games and update docs / readme etc").
+
+**Thumbnail atlas**: `assets/thumbnails4.png`'s existing 4x2 grid (8
+cells, `THUMBNAIL4_GRID_ROWS`=2/`THUMBNAIL4_COUNT`=8 in `portVircon32.c`)
+only had room for 4 of these 22 games in its own already-free cells
+(Cracky/Aerial/Antiair/Ascend, registration indices 60-63, right at the
+tail of the then-current 64-slot total capacity across all 4 textures) -
+the other 18 (`AWASS` through `YEWDOW`, registration indices 64-81) had
+no thumbnail slot at all, since total registered games (82) had grown
+past the combined 64-slot capacity (32+16+8+8) without anyone having
+grown a texture to match. Grown from 2 rows to 7 (1024x256 -> 1024x896,
+still comfortably inside Vircon32's 1024x1024 per-texture cap) rather
+than adding a 5th texture - the first time growing an *existing* atlas's
+own grid (instead of adding a new texture) was still an option at the
+point a shortfall was found, since thumbnails4 was the newest/least-full
+one. New capacity (28 cells) covers all 22 games with 2 cells to spare.
+
+**Screenshot capture**: one real gameplay screenshot per game via the
+established Puppeteer/WebGL harness, each game reached with a generic,
+uniform button sequence (launch from the menu, 2 Fire presses to clear
+the "TITLE -> START/CONTINUE" screen every Cate-engine game shares, a
+small movement nudge, then capture) rather than a bespoke per-game
+sequence - a reasonable simplification given all 22 share the exact same
+engine-level title/start-menu structure (already established while
+building/testing Cracky and Cavit earlier this session). Cropped to the
+640x320 game area and downscaled to 256x128 for the atlas, matching the
+project's own standing thumbnail pipeline; kept at native 640x360 for
+`metadata/screenshots/`. **One real navigation miss caught before
+compositing anything**: the very first game captured this way (`AERIAL`,
+menu position 2 right after `2048`) came back showing 2048's own puzzle
+grid instead of Aerial's real side-scrolling gameplay - the single
+`ArrowDown` press meant to move off the default first-item selection
+landed during a too-early, not-yet-input-ready window right after the
+BIOS boot splash cleared (only this very first capture in the whole
+batch hit it - every later game's own capture, later in the same
+sequence, had already had time to settle). Caught by reviewing every
+candidate screenshot against what each game's own header comment says it
+actually is, not assumed correct from the file just being nonempty -
+redone with a longer settle delay and an explicit canvas click before
+the first input, confirmed correct on the redo.
+
+**Composited and verified**: rebuilt the full 1024x896 atlas (existing
+row 0 - Asteroid/Helicopter/Car Race/Tiny Blocks - untouched, all 22 new
+thumbnails placed in registration-index order starting at cell 4),
+rebuilt the ROM, and confirmed via Puppeteer across 4 spot checks
+(Asteroid - an existing, untouched thumbnail; Ascend and Yewdow - two of
+the newly-added ones, one from each end of the new range; Svellas - a
+mid-batch check) that every thumbnail displays correctly at its correct
+menu position with the correct "BY INUFUTO" credit line, and that the
+pre-existing Asteroid thumbnail is genuinely unaffected by the grid
+regrow.
+
+**Docs**: `README.md`'s intro bumped from "60 games" to "82 games" (and
+now mentions the CH32V003/RISC-V hardware class alongside ESP8266/
+ESP8285, since this batch is the first non-AVR, non-ESP hardware in the
+whole cartridge); all 22 games added as new table rows (Author "Inufuto",
+MCU "CH32V003", License "None specified", Save "—", Source linking to
+each game's own real `github.com/inufuto/UIAPduino_<name>` repo), merged
+into the table's own existing alphabetical-by-title order rather than
+appended at the end. `metadata/screenshots/` grew from 60 to 82 PNGs,
+one real gameplay capture per new game (the same captures used for the
+in-game thumbnails, just kept at native 640x360 instead of being
+downscaled).
+
+## Licensing
+
+Tiny Invaders v4.2 is GPLv3 (its `tinyJoypadUtils`/driver lineage). Since a
+GPLv3 game is compiled into the cartridge, the cartridge as a whole is a
+GPLv3 combined work - `LICENSE.txt` (repo root) is GPLv3 for this port's own
+new code (shim, menu, `portVircon32.c`), unlike the sibling
+`crisp-game-lib-portable_vircon32` project (MIT throughout, since every
+upstream source there was MIT). Each game's own original
+license/attribution is preserved in a header comment in its ported `.c`
+file: NumberPlace/t2048/HollowSeeker stay MIT/OBONO-attributed; Tiny
+Dungeon also stays MIT (its own header: "MIT License", "Developer: Sven
+B", contact Lorandil@gmx.de - the same contact as Tiny Minez, credited
+the same way, "SVEN B / LORANDIL"); Tiny
+Invaders, Tiny Pinball, Tiny Pacman, Tiny Bomber, Tiny Doc, Tiny Bert,
+Tiny Tris, Tiny Arkanoid, Tiny Trick, Tiny Minez, Tiny Missile, Tiny Bike,
+Tiny Arena, Tiny Gilbert, Tiny Pipe, Tiny Morpion, Tiny Plaque, Tiny
+SQuest, Tiny DDug, Tiny Lander, Tiny Mania, Nohzdyve, Gilbert in the
+Downland, and Ardumania all stay GPLv3
+(Tiny Mania is the newest of the tinyjoypad.com-proper titles, its own
+header crediting "Daniel C 2026" directly - the same author/license
+lineage as most of the rest of this list, credited "DANIEL C" in the menu
+the same way as Tiny Pinball/Pacman/etc above; Nohzdyve, Gilbert in
+the Downland, and Ardumania are a different case again - none of the
+three is from tinyjoypad.com at all, all three instead come from Daniel
+C's own separate ESP8285/ESP8266 "MEGA TinyJoypad" compilation (see this
+file's own writeup above for each - Ardumania's own header additionally
+notes it's based on the original Arduboy version, itself MIT-licensed,
+but this ESP port carries its own distinct GPLv3 relicense header just
+like its two siblings), individually "relicensed under GPLv3" by Daniel C
+for that specific ESP port, all three credited "DANIEL C" in the menu the
+same way;
+Tiny Lander's own
+header credits "Roger Buehler" / GitHub handle "tscha70" - a different
+author from every Daniel-C/Sven-B title above, credited separately in
+the menu as "ROGER BUEHLER"). Wren Rollercoaster, Frogger, Bat Bonanza,
+Stacker, and UFO are the exceptions - all five share the same looser
+"non commercial [use] with attribution" license (crediting Billy
+Cheung's own ATtiny-Joypad port adaptation and the separate
+`ssd1306xled`/Neven-Boyanov-authored font each builds on), though not
+all under the same original author: Wren/Frogger/Bat Bonanza/Stacker are
+all Andy Jackson's own games (Frogger's own credit also names
+@senkunmusashi for its artwork bitmaps), while UFO is credited to a
+different original author, Ilya Titov - Jackson himself only combined
+UFO alongside his own Stacker into one shared cartridge, not authored it -
+credited in the menu as "ILYA TITOV" accordingly, not Jackson. Oroboros
+and Run Dude Run (see "Beyond the original scope" above) share this same
+license family and are also Ilya Titov's own, sourced directly from his
+own `webboggles/AttinyArcade` repo rather than a combined-cartridge
+mirror. Breakout (see the `more games/gametiny/` re-verification above)
+is Ilya Titov's own too, credited the same way - unlike Oroboros/Run
+Dude Run its own port was sourced from the `UFO_Breakout_Arduino`
+combined-cartridge copy (Andy Jackson's own UFO+Breakout pairing) rather
+than `webboggles/AttinyArcade` directly, though a standalone copy was
+separately confirmed to exist there too
+(`sketches/attiny_breakout_vcc_gnd_scl_sda/`) and is what the README's
+own source link points to, matching Oroboros/Run Dude Run/UFO's own
+precedent of citing the canonical repo over a combined-cartridge mirror
+when both exist. Space Attack (see the same re-verification above) is
+Andy Jackson's own - the same author and license family as Wren/Frogger/
+Bat Bonanza/Stacker - credited "ANDY JACKSON" accordingly, sourced from
+`SpaceAttackAttiny` directly (a standalone file, not a combined-cartridge
+extraction the way Breakout's own port needed). Falling Blocks (see the
+same re-verification above) is also Andy Jackson's own - same author and
+license family as Wren/Frogger/Bat Bonanza/Stacker/Space Attack, credited
+"ANDY JACKSON" accordingly, sourced directly from its own upstream
+"multi-button" folder (see this file's own `more games/gametiny/` catalog
+entry above) - its own writeup above covers why its menu name and every
+mention in this project's own documentation deliberately avoid the
+trademarked genre name its upstream folder name and header comment both
+use. Blocks Gold is a different case again - its own upstream repo
+(`ATtiny-Tetris-Gold`) credits multiple people ("Andy Jackson, Anthony
+Russell, Tobozo, Neven Boyanov, Jarosław Mazurkiewicz"), under a mixed
+license ("the code that does not fall under the licenses of sources
+listed below can be used non-commercially with or without attribution") -
+credited in the menu as "ANDY JACKSON / JAROMAZ" (the base engine's own
+author plus this specific fork's own author, the same "credit exactly
+what the header says, using multiple names when warranted" convention as
+Tiny Invaders'/Tiny Minez's own credits above), and - same as Falling
+Blocks - its menu name and every mention in this project's own
+documentation deliberately avoid the trademarked genre name its own
+upstream repo/title spells out. Astro Barrier is a plain, single-author
+case again - Sean Price (GitHub `SeanP2001`), GPLv3, credited "SEAN
+PRICE" in the menu, sourced from `github.com/SeanP2001/attiny-astro-
+barrier` (itself the renamed/moved location of the repo originally found
+at `SeanP2001/ATtiny_Astro_Barrier` during the wider search - GitHub's
+own redirect confirmed this is the same repository, not a different one).
+ATtiny Snake is the same author/license again - Sean Price, GPLv3,
+credited "SEAN PRICE" in the menu, sourced from
+`github.com/SeanP2001/attiny-snake` (the renamed/moved location of the
+repo originally found at `SeanP2001/ATtiny_Snake`, same redirect
+situation as Astro Barrier's own repo above). Meteor Storm is a
+different case again - Unlicense/public domain (confirmed via its own
+repo's real `LICENSE` file, not guessed), author Albert Gonzalez (GitHub
+handle `theisolinearchip` - the repo's own README only names the handle,
+but its own git commit author confirms the real name), credited "ALBERT
+GONZALEZ" in the menu accordingly. Flappy Bird is a different case again -
+a known, directly-stated author (Alex Wulff, named in the `.ino`'s own
+first line) but no license statement anywhere in the game's own code -
+the same "known author, unstated license" situation as Jump Slime/
+TinyRoG/TinY Fi above, credited "ALEX WULFF" in the menu and listed as
+"None specified" in the README for licensing purposes only. Tiny Bulls
+And Cows is a clean MIT case again - `github.com/datacute/TinyBullsAndCows`
+states MIT directly in its own `LICENSE` file, credited "DATACUTE" in the
+menu (the repo owner's own handle - no separate real name is stated
+anywhere in the game's own source). ATtiny Tetromino is GPLv3 - its own
+`LICENSE.txt` states it directly - credited "SUNPAZED" in the menu (the
+GitHub handle of Franco Trimboli, the fork's own author - kept as the
+handle rather than the real name at direct user request, matching the
+attract screen's own "BY SUNPAZED" credit line; its own credited base,
+`jfoucher/attiny-tetris`, states no license at all, but only sunpazed's
+substantially-enhanced fork was actually staged/ported - see this file's
+own catalog entry above for why). Laser Pong is a clean MIT case again -
+`more games/ATTiny85_Pong/`'s own upstream repo (credited "Winston-Lu")
+states MIT directly, credited "WINSTON LU" in the menu (its own real
+stated name, not a bare handle). Pipe Bird is a different case again -
+a known author (Ioannis Lampropoulos, confirmed via the repo's own real
+git commit author, the same identification method already used for
+Meteor Storm's own credit) but no license statement anywhere in the
+game's own code or in a README/LICENSE file - the same "known author,
+unstated license" situation as Jump Slime/TinyRoG/TinY Fi/Flappy Bird
+above, credited "IOANNIS LAMPROPOULOS" in the menu and listed as "None
+specified" in the README for licensing purposes only. Road Rush,
+DFlight, MRunnr, and Asteroid are all a clean GPLv3 case - both
+`tonym128/BFlight` (Road Rush/DFlight/MRunnr) and its own older sibling
+repo `tonym128/ESP8266GameOn` (Asteroid) state GPLv3 directly (each a
+real `LICENSE` file, not just a claim), all four credited "TONYM128" in
+the menu (the GitHub handle, matching each game's own in-game attract
+screen "BY TONYM128" credit line - the README's own fuller "Tony M
+(tonym128)" author column adds the real name each repo's own README also
+states, the same "menu gets the terse handle, README gets the fuller
+credit" split already used for ATtiny Tetromino's own "SUNPAZED" menu
+credit). Helicopter is a clean GPLv3 case again, from a wholly different
+author/repo - `innif/Arduino-Game-System`'s own real `LICENSE` file
+states GPLv3 directly, credited "FINN HARMS" in the menu (the real name
+behind the GitHub handle "innif", confirmed via the repo's own git
+commit author rather than guessed). Car Race is a different case again -
+a known author (hoangminh5210119, the repo owner - no real name stated
+anywhere in the repo, its own Vietnamese-language README, or the game's
+own source) but no license statement anywhere (no LICENSE file in the
+repo root; only two bundled third-party libraries, SimpleButton and
+SSD1306, carry their own separate licenses, neither covering this game's
+own code) - the same "known-but-unstated-license, credit the real handle
+rather than UNKNOWN" situation as Datacute/Sunpazed, credited
+"HOANGMINH5210119" in the menu and listed as "None specified" in the
+README for licensing purposes only. Tiny Blocks is the same situation
+again - a known author (RobotMasterC, the repo owner - no real name
+given anywhere) with a confirmed-absent license (the GitHub API itself
+returns `"license": null` for the repo, and no LICENSE file exists in
+it), credited "ROBOTMASTERC" in the menu and listed as "None specified"
+in the README. Four in a Row
+and Dino
+Game are the two exceptions to every
+license-family grouping above - neither's own source carries an author
+name or a license statement at all (neither is present in
+`webboggles/AttinyArcade` either, only in
+`Yevgeniy-Olexandrenko/tiny-handheld`'s own bundle, which itself has no
+repo-wide LICENSE file covering either). Four in a Row is credited in
+the menu as "UNKNOWN" (genuinely anonymous, no context at all as to its
+origin); Dino Game is credited as "TINY HANDHELD" instead of "UNKNOWN"
+since it's specifically documented as an original creation of that
+project itself (not sourced from anywhere else, unlike every other game
+in this whole cartridge) - crediting the originating project is
+meaningfully informative here, not a guess, even though no individual
+person is named. Both are listed in the README as "None specified"
+rather than guessing a license that isn't actually stated anywhere.
+Preserved as their own distinct license text in each file's own header comment
+rather than relabeled GPLv3, though the cartridge as a combined work
+remains GPLv3 overall regardless (a project-level determination already
+settled by Tiny Invaders' own GPLv3
+lineage, not something that changes per individual game file).
+SnakeGame85 is its own separate case again: its repo carries a real,
+unambiguous GPLv3 `LICENSE.txt` (confirmed directly, matching Tiny
+Invaders' own license exactly), but - like Four in a Row/Dino Game - no
+individual author name anywhere in its own source or README, only the
+GitHub handle the repo is hosted under - credited in the menu as
+"TEREZAZA" rather than "UNKNOWN", since a specific handle tied to a
+specific repository is more informative than genuine anonymity, the same
+reasoning already applied to Tiny Minez/Tiny Dungeon's own "SVEN B /
+LORANDIL" credit.
+Jump Slime is a different case again from every one above: its author
+*is* known by name (近藤さんちの研究室 / "kondolab", identified via the
+note.com articles linked from `more games/sample/source.txt`, not
+guessed) - credited in the menu as "KONDOLAB" - but no license is stated
+anywhere on the author's own article pages for this game's own code
+(only the separately-referenced `gametiny`/`ssd1306xled` libraries are
+confirmed GPLv3 there). Listed as "None specified" in the README for
+licensing purposes only - unlike Four in a Row/Dino Game/SnakeGame85,
+this is a case of a known author with an unstated license, not an
+unknown author. TinyRoG and TinY Fi both share this exact same situation
+(same author, same "None specified" license treatment) - see their own
+writeups above.
+Attribution (corrected mid-session after checking each `.ino`'s own
+header comment directly, rather than trusting this file's earlier,
+imprecise "Lorandil" shorthand): Tiny Pinball/Pacman/Bomber/Doc/Bert/
+Tris/Trick are "Daniel C"; Tiny Arkanoid's own header spells the same
+name out in full, "Daniel Champagne" (contact `phoenixbozo@gmail.com` -
+the same "phoenixbozo" already credited above for the shared
+`tinyJoypadUtils`/`FastTinyDriver` display driver, so likely the same
+person as "Daniel C" using a fuller name); Tiny Invaders v4.2 credits
+"Daniel C" as original programmer plus "Sven B" for this specific v4.2
+release's enhancements; Tiny Minez credits "Sven B" as programmer, with
+contact email `Lorandil@gmx.de` - the same contact address TinyDungeon's
+own header also uses for its "Sven B"-credited author, strongly
+suggesting "Lorandil" (the GitHub account these repos are hosted under)
+and "Sven B" are the same individual rather than two different people.
+Games are credited in the menu using whichever name(s) each upstream
+header actually states, rather than the single guessed name used
+earlier this session.
+
+Cracky and the 21 sibling "Cate engine" ports (Aerial, Antiair, Ascend,
+Awass, Battlot, Bootskell, Cacorm, Cavit, Guntus, Hopman, Impetus, Lift,
+Mazy, Mazy2, Mieyen, Neuras, Osotos, Ruptus, Svellas, Sword, Yewdow) are
+all a clean single-author case, distinct from every prior group above:
+real CH32V003 RISC-V (not AVR) hardware, all 22 sourced from separate
+`github.com/inufuto/UIAPduino_*` repos, none of which states a license
+anywhere (no LICENSE file in any of the 22 upstream repos) - credited
+"INUFUTO" in the menu (the shared GitHub handle across every one of these
+repos - no individual real name is stated anywhere in any of them) and
+listed as "None specified" in the README for licensing purposes only, the
+same "known handle, unstated license" treatment already established for
+Datacute/Sunpazed/RobotMasterC above. See "Cracky, and a whole new source
+family" further below for the full technical writeup.
+
+## Project-wide render optimization attempt: column-run coalescing (tried, measured a regression, fully reverted)
+
+Prompted by a direct question ("would RLE-encoded images / drawing one
+rect for a run of same-color pixels be faster for all games?") after Tiny
+Missile's own CPU-load fix - the underlying reasoning looked sound and
+matched this project's own established cost model (a GPU blit's *call*
+overhead dominates, not the pixel area it covers), and `md_drawSolidRect()`
+already proved stretching one atlas tile via `set_drawing_scale()`+
+`draw_region_zoomed_at()` works mechanically. Rolled out project-wide (all
+14 games/shims, not piloted first, per explicit request) as two new
+primitives, `md_drawColumnRun(col,page,value,count)` and
+`md_drawColumnRow(page,values)` (coalesces consecutive equal-value runs in
+a row into single stretched blits instead of one `md_drawColumn()` call
+per column).
+
+**The user then measured it in the real native emulator (not a synthetic
+benchmark) and reported a genuine regression** - a screenshot showing
+"On-time 50/60 (83%)" and a dense/spiky CPU graph, worse than before the
+change, specifically calling out that even Tiny Doc with many pills felt
+slower, not faster. Investigated by reading the actual emulator engine
+source (`V32Console.cpp`) rather than re-reasoning from the documented
+cost model alone: **GPU load is pixel-count-based** (`GPULoad =
+GPUUsedPixels / GPUPixelCapacityPerFrame`), not call-count-based - so
+stretching a run wider doesn't reduce GPU cost the way reducing draw
+*calls* reduces CPU cost. Worse, `set_drawing_scale()`+
+`draw_region_zoomed_at()` (used for any run >=2 columns) evidently costs
+*more* CPU cycles per call than plain `draw_region_at()`, and most real
+game content produces short 2-3-column runs, not long ones - so the
+"fewer calls" win from coalescing was smaller than the "each surviving
+call costs more" penalty for the overwhelming majority of actual content,
+a net loss rather than a win.
+
+**Fully reverted** across all 14 game/shim files back to plain
+per-pixel `md_drawColumn()` calls, plus removed the two now-unused shared
+primitives from `machineDependent.h`/`portVircon32.c` - confirmed via a
+final `grep -rn "md_drawColumnRun\|md_drawColumnRow"` sweep (zero matches)
+and a grep for every leftover per-game row-buffer variable name added for
+this rollout (also zero matches), then rebuilt and Puppeteer-screenshot-
+verified all 14 games render correctly on the reverted build. This was a
+judgment call, not an explicit user instruction to revert - made directly
+once the measured evidence was conclusive, consistent with this project's
+own standing practice of trusting real measurement over a theory-only
+cost model, even a previously-reliable one.
+
+**Generalizable lesson**: "fewer draw calls is always better" is only
+true for the CPU-cycle side of Vircon32's cost model; the GPU-pixel side
+doesn't care about call count at all, and a "smarter" replacement
+primitive can itself cost more per call than the naive one it replaces.
+Any future call-reduction optimization on this platform needs to be
+verified with a real before/after measurement (see the performance
+overlay below), not shipped on cost-model reasoning alone, however solid
+that reasoning seemed the last several times it held up.
+
+## In-browser performance overlay (WebGL build)
+
+The native desktop emulator (`C:\utils\Vircon32\Emulator\Vircon32.exe`)
+has its own built-in ImGui CPU/GPU load graph overlay, but automating
+input into that separate native GUI process from this environment proved
+unreliable (SendKeys/SendInput/SetForegroundWindow attempts all failed to
+reliably land - see git/session history) - so a matching overlay was
+built directly into this project's WebGL/Puppeteer test build instead
+(`C:\github\WebEmulator\DesktopEmulator\Emulator\MainWeb.cpp`/
+`shell.html`), modeled on the native overlay's own underlying mechanism
+(`V32Console::GetCPULoad()`/`GetGPULoad()`, each a 0-100% share of that
+frame's cycle/pixel budget) after reading `ComputerSoftware_X`'s source as
+reference.
+- **Hidden by default, toggled with F6** (`#perf-overlay` uses the same
+  `.hidden`-class convention as this file's other overlays - a first
+  attempt used a bare `display:flex` CSS rule that overrode the `hidden`
+  attribute's own default, a real bug, fixed by switching to `.hidden`).
+- `MainWeb.cpp`'s per-frame loop pushes `CpuLoad`/`GpuLoad` out via
+  `EM_ASM(Module.onPerfUpdate($0,$1))`; `shell.html`'s JS side keeps an
+  80-sample scrolling history per meter and draws a bar graph (green/
+  yellow/red by threshold), reusable via `require('puppeteer')` screenshot
+  captures the same way every other test in this project works.
+- **A real bug found while building this**: `Module.onPerfUpdate = ...`
+  was originally assigned at top-level script scope *before* `var
+  Module = {...}` was actually assigned later in the same script block
+  (JS only hoists the `var` declaration, not the assignment) - threw an
+  uncaught exception that aborted the rest of the script, which looked
+  exactly like "the ROM doesn't load" from the outside. Fixed by moving
+  the assignment to right after `var Module = {...};`.
+- **Always use this overlay (not a synthetic estimate) for any future
+  performance work in the WebGL build** - screenshot it via Puppeteer,
+  crop/zoom the top-left corner with ImageMagick if the digits are too
+  small to read directly, and read the actual number rather than
+  estimating from visual busyness.
+
+## Tiny Doc: row-scoped dirty tracking (found via the new perf overlay)
+
+Requested stress test: prefill Tiny Doc's board to near-full and check
+whether `tdCompositeTabIntoBuffer()`'s existing dirty-flag cache (see its
+own history in the Status section above) holds up under that load, using
+the new perf overlay above rather than guessing.
+
+**Two bugs found in the debug stress-test hook itself, not in the real
+game**, worth remembering for any future synthetic stress-test scaffold:
+1. The debug fill (`tdDebugFillBoard()`, called once at init) was wiped
+   the instant real gameplay started, because `tdBeginLevel()` (fired by
+   the ATTRACT screen's own Fire-press handler) calls
+   `tdInitPublicVarForNewLevel()`, which unconditionally zeroes the whole
+   `tdTab` grid - fixed by calling the debug fill *after* `tdBeginLevel()`
+   returns, not before it's ever reached.
+2. The debug fill's cell-value generator used `tdOrderSelect()` - which
+   is specifically the *virus* value generator (values 1-3) - instead of
+   a genuine pill-half value. Since `tdCountVirusTypes()` treats any cell
+   value 1-3 as a virus regardless of intent, this miscounted almost the
+   entire filled board as viruses (visible as an absurd "V:56"/"V:64"
+   reading), which then corrupted the on-screen score via
+   `tdFirstCalculeDisplay()`'s virus-count-delta formula - garbled digits
+   in the SCORE readout that looked exactly like a real rendering bug
+   until traced back to the fill data. Fixed by switching to a plain
+   `arand(3)+1+10` pill-half color (matching `tdGenerateSidePill()`'s own
+   value range, no direction bits needed since the debug fill doesn't
+   need genuine connected pairs).
+
+**The real, generalizable finding**: with the board genuinely packed
+(all columns except the pill-spawn lane, to still allow a real fall), a
+single deliberate pill lock previously forced `tdCompositeTabIntoBuffer()`
+to recompute *all 7* tab-bearing page rows (`tdTabDirty` was one global
+flag covering the whole grid), even though a single lock only ever writes
+1-2 known grid cells. Replaced the single `bool tdTabDirty` with a per-
+page-row `bool[8] tdPageRowDirty` plus two helpers: `tdMarkAllRowsDirty()`
+(used by every mutation site whose touched range is unpredictable or
+genuinely whole-grid - level init, the clear/drop resolve cascade, the
+virus idle-animation tick) and `tdMarkGridRowDirty(gy)` (marks only the
+page row(s) whose grid-row range, per the existing `tdReturnScanLineY()`
+table, actually covers grid row `gy`). `tdFixPill()` - by far the single
+most frequent grid mutation during real play, one call per pill lock -
+was switched to the precise per-row marking, cutting its recompute scope
+from all 7 page rows to the 1-2 that actually changed. Every other
+mutation site kept the safe `tdMarkAllRowsDirty()` fallback, zero
+behavior change there. Verified: normal (non-debug-filled) gameplay
+renders identically after the change (score/virus-count/board all
+correct), and the change is a pure narrowing of an already-correct
+invalidation scope with no new risk.
+
+**Caveat on quantifying the improvement**: the perf overlay's CPU% meter
+clamps to 100, so a saturated reading can't show *how far* over budget a
+frame is or by how much a fix reduced that - an aggressive synthetic
+"spam locks every 120ms" test read ~100% both before and after this fix,
+which is inconclusive by itself (could mean "still over budget but less
+so" or "no change" - the meter can't distinguish). A more realistic test
+(board packed, piece merely falling under normal gravity with no manual
+spamming - the scenario the user actually asked about) showed CPU
+oscillating between ~6-8% (idle, cache hit) and 100% (the frame a lock's
+recompute lands on), which is the expected sawtooth shape for a dirty-
+cache design - narrower recompute scope should shrink the *size* of each
+spike even where the crude 0-100 meter can't prove it numerically. This
+project's testing throughout has used `SKIP_V32OPT=1` (unoptimized)
+builds, consistent with prior sessions - `v32opt`'s real inlining/DCE
+(268 optimizations last time it was tried, never independently
+re-verified since - see the CPU-load investigation section above) remains
+a separate, larger, not-yet-confirmed lever for lowering these numbers
+further if they still prove to be a problem in practice.
+
+## Visual testing setup (useful for future sessions)
+
+No screenshot/browser-automation tool is available directly in this
+environment, but a working headless-browser test loop was set up using
+tools already present on this machine:
+- `C:\github\WebEmulator\DesktopEmulator\WebBuild` - a WebGL/Emscripten
+  build of the Vircon32 emulator. It loads `game.v32` from its own
+  directory (relative fetch), so testing a build means copying
+  `bin/tinyjoypad.v32` over that file (the original demo ROM there was
+  backed up to `game.v32.orig` first).
+- Served locally via `python -m http.server` from that directory.
+- `C:\github\emsdk\node\<version>\bin` has a bundled Node/npm (this machine
+  has no system-wide Node install) - used to `npm install puppeteer` and
+  drive a headless Chromium (needs `--use-gl=angle --use-angle=swiftshader
+  --enable-unsafe-swiftshader` launch flags for software WebGL to actually
+  work headless) to load the page, send keydown/keyup events, and
+  screenshot. The BIOS boot splash takes a few seconds to clear before the
+  cartridge's own menu appears - wait for it before interacting.
+- **`hideOverlay(page)` - always call this once right after page load,
+  for every screenshot from now on, not just thumbnail captures.** The
+  shell page's own UI chrome (`#fullscreen-button`, `#bottom-left-bar`
+  - the FPS counter/info button, `#perf-overlay`) had already
+  contaminated part of the shipped thumbnail atlas once (see "Menu
+  thumbnail atlas fully regenerated" above) before this was added, at
+  direct user request, as a standing practice rather than a one-off fix.
+  A small shared helper (`browsertest/helpers.js` in the scratchpad
+  directory) sets `element.style.display='none'` on those three element
+  IDs via `page.evaluate()`; only skip calling it on the rare screenshot
+  that's *specifically* trying to show/measure that chrome on purpose
+  (e.g. reading the perf overlay's own CPU%/history graph for a
+  performance investigation - toggle it with F6 instead in that case,
+  and don't call `hideOverlay`).
+
+## A real D-pad input-bleed bug in the menu's own quit-to-menu transition, ported from the sibling gamebuino_classic_vircon32 project
+
+Found and fixed first in the sibling `gamebuino_classic_vircon32` project
+(which reuses this project's own `menu.c` directly), then applied here
+too on direct request since both projects share the exact same shape:
+`menu_init()` used to reset every `prevX` unconditionally to `false`,
+regardless of whatever the D-pad's own real physical state already was at
+that exact moment. `menu_init()` is called right after confirming Quit in
+the quit-confirmation dialog (`portVircon32.c`'s own `currentGameIndex =
+-1; menu_init();`), and Fire itself was already safe on this exact path -
+`md_armInputFireGate()` (armed immediately before this, in the same
+`confirmingQuit` block) makes `md_inputFire()` itself report "released"
+until the physical button genuinely is, so `menu.c`'s own `fire =
+md_inputFire()` read already couldn't see a leftover press - but no
+equivalent gate exists anywhere for Up/Down/Left/Right. A player still
+holding, say, Right (moving their character) at the exact moment they
+confirmed Quit would have had `prevRight` forced to `false` while the
+real button stayed `true` - manufacturing a false "just pressed" edge on
+the very next `menu_update()` tick and instantly paging the just-reopened
+menu sideways, with no new input from the player at all.
+
+**Fixed** by having `menu_init()` sample each button's own real current
+state (`md_inputUp()`/`Down()`/`Left()`/`Right()`/`Fire()`) instead of
+assuming released - the same "arm against whatever's already held" idea
+`portVircon32.c` already uses for `prevConfirmLeft`/`Right`/`Fire` right
+before opening the quit dialog itself, just applied to the menu's own
+return path too. `menu_init()`'s other call site (cartridge boot, before
+any game has ever run) is unaffected in practice - a player could
+technically be holding a direction at the exact moment the ROM finishes
+loading, but that's a far narrower window than the every-single-quit case
+this was actually found for. Verified via a clean rebuild
+(`SKIP_V32OPT=1 Make.sh`, `BUILD SUCCESSFUL`) - not re-tested in the
+emulator, since the fix is a direct, mechanical port of an already-proven
+change from the sibling project, applied to structurally identical code.
+
+## Cracky, and a whole new source family: inufuto's "Cate engine" (CH32V003/RISC-V + SSD1306, UIAPduino hardware)
+
+A genuinely new hardware/source family for this project, found via a direct
+user link (github.com/inufuto/) rather than any of the earlier discovery
+passes above. Unlike every prior port here, this hardware is a real
+**CH32V003 RISC-V MCU, not AVR** - `avrCompat.h`'s whole uint8_t-narrowing/
+PROGMEM-flattening toolkit is irrelevant to this family, since there's no
+AVR-implicit-narrow-type behavior to preserve or guard against in the first
+place. inufuto's own small C++ framework ("Cate engine" - `Uncopyable.h`/
+`Timer.cpp`/`ScanKeys.h`/`Oled.cpp`/`Vram.cpp`/`VVram.cpp`/`Sound.cpp`/
+`Print.cpp`) is shared verbatim, sometimes byte-for-byte, across dozens of
+small UIAPduino repos, each one a single self-contained game.
+
+**Cracky** (`src/games/gameCracky.c`, license "None specified") was ported
+first, as the proof case, and needed a long, genuinely painful, adversarial
+debugging saga around screen orientation before landing on the final
+answer: **no orientation transform of any kind is needed at all**. Several
+wrong attempts were tried in sequence (a full mirror+flip, a vertical-only
+flip with bit-reversal, a column-mirror-for-the-map-only-but-not-text
+hybrid) based on the reasonable-looking assumption that `InitOled()`'s own
+`SegRemap`/`ComScanDec` register writes needed replicating in software, the
+same way a couple of earlier ports in this project needed a real
+orientation fix. A user-supplied genuine reference photo of correct real-
+hardware output, plus careful re-derivation of the raw page/column
+addressing, proved this assumption wrong: those two SSD1306 commands exist
+to correct a *physical panel-mounting* quirk specific to that hardware
+module, with nothing analogous to correct for in a from-scratch software
+recreation - the composed byte is drawn directly at its own `(col,page)`
+via `md_drawColumn()`, full stop. The actual root cause behind every
+"broken" screenshot along the way turned out to be a separate, genuine bug
+(`crkInitTrying()` never clearing `crkStatusChar`, so title-screen text
+bled into gameplay HUD) that made every orientation attempt look wrong
+regardless of whether the transform itself was right - this conclusion,
+and the reasoning trail that led to it, is now documented directly in
+`crkComposeRawByte()`'s own header comment and repeated as a **CRITICAL**
+warning in every subsequent porting effort in this family, since re-
+deriving it from scratch each time would have been a serious risk of
+repeating the same multi-round debugging cycle for every single game.
+
+Also found and fixed in Cracky: a stale `crkStageTime` value bleeding from
+game-over back onto the title screen (fixed by resetting it in
+`crkBeginTitle()`), and - found only later, incidentally, while a sibling
+port (Hopman) was re-reading this same function for its own title-screen
+layout - two real, previously-unnoticed bugs in the title screen itself:
+`sContinue` was a full 8-character "CONTINUE" written starting at column 1
+(columns 1-8), one column past `crkStatusChar`'s own valid 0-7 range - a
+genuine out-of-bounds write silently corrupting the start of the next
+page's own row in the flat array; and `crkPrintStatus()`'s own SCORE/
+STAGE/TIME labels (pages 0/3/5) were being partially overwritten mid-word
+by the title screen's own credit line (page 3, colliding with STAGE) and
+"START" (page 5, colliding with TIME), drawn moments later. **Fixed**
+(after the whole batch below completed) by dropping the redundant in-game
+credit line entirely (already shown at game-select via the menu's own
+"BY INUFUTO" credit, and with only pages 2/4/6 genuinely free of every
+status label, there wasn't room to relocate all of title+credit+start+
+continue without dropping something), moving "START" onto the now-free
+page 4, and truncating "CONTINUE" to "CONTINU" (7 characters) - the same
+workaround every sibling port below independently arrived at for the
+identical bug once they started auditing their own title screens.
+Verified via a Puppeteer screenshot: SCORE/STAGE/START/TIME/CONTINU all
+now render as fully distinct, non-overlapping, in-bounds text.
+
+**The whole rest of the family was then staged and ported via 21 parallel
+background agents** (`Agent` tool, `subagent_type: general-purpose`, one
+per game, `run_in_background: true`), each given the same shared
+methodology brief: read `gameCracky.c` in full as the reference
+implementation first; the CRITICAL no-orientation-transform warning above,
+verbatim; the project's own dialect restrictions (no ternary, no switch,
+`int[N] name` array declarations, pointer array parameters, strict
+define-before-use ordering with no forward declarations); the class-
+flattening pattern (C++ classes -> structs + prefixed free functions);
+building a 3-slot frame-stepped sound sequencer resolving melodies "by id"
+exactly matching Cracky's own `crkStartSeq`/`crkAdvanceOneSeq`/
+`crkMelodyLength`/`crkMelodyValue` shape; reusing the existing
+`isLeftPressed()`/etc shim with no new primitives; a unique per-game
+identifier prefix; and an explicit instruction not to touch `src/main.c`
+or `src/menuGameList.c` (reserved for one central registration pass once
+every game was individually confirmed complete, to avoid parallel-write
+conflicts between concurrently-running agents). All 21 games shipped:
+**Aerial, Antiair, Ascend, Awass, Battlot, Bootskell, Cacorm, Cavit,
+Guntus, Hopman, Impetus, Lift, Mazy, Mazy2, Mieyen, Neuras, Osotos,
+Ruptus, Svellas, Sword, Yewdow** - all credited "INUFUTO" (the shared
+GitHub handle across every one of these repos), license "None specified"
+for all (no LICENSE file in any of the 21 upstream repos).
+
+**The batch dispatch itself needed several real rounds of recovery**,
+worth remembering as a pattern for any future large-batch background-agent
+operation: the account-wide Claude session limit was hit twice mid-batch
+(each time surfacing as every currently-running agent failing
+simultaneously with the same "You've hit your session limit" error,
+sometimes only after the agent's own file was already partially written)
+- resolved each time by resuming the exact same agent (via `SendMessage`
+to its own agent id, not a fresh `Agent` call) once the limit reset,
+explicitly telling it to re-read its own partial file first and continue
+from where it left off rather than restart from scratch. This worked
+cleanly every time - agents resumed via `SendMessage` retain their own
+prior context/reasoning, so a resumed agent doesn't need to re-derive
+anything it had already figured out before the interruption. A handful of
+individual dispatch attempts also hit a separate, purely transient
+"temporarily rate-limited" error (unrelated to the account session cap) -
+resolved by simply retrying the same dispatch a few seconds later. The
+20-concurrent-background-agent platform limit was hit once too (the 21st
+game, Antiair, had to wait for an earlier game to finish before its own
+first dispatch attempt could go out) - not an error exactly, just a
+natural back-pressure point that resolved itself as soon as any other
+agent in the batch completed.
+
+**Each individual agent test-compiled its own file in isolation** (a
+scratch copy of `main.c` `#include`-ing only its own new game file
+alongside every already-shipped one, never touching the real `main.c`/
+`menuGameList.c`), but this can only prove a file is internally self-
+consistent - it can't catch collisions or ordering problems that only
+surface once every game from a 21-way parallel batch is combined into one
+real translation unit. **The actual central registration pass (bumping
+`MAX_GAMES` from 64 to 128 in `menu.c`, adding all 21 `#include`s to
+`main.c`, and all 21 `addGame()` calls to `menuGameList.c`) surfaced 6
+real, previously-uncaught bugs**, each fixed directly rather than kicking
+the file back to its own agent, since by that point every agent had
+already reported done and the fixes were small, mechanical, and already
+fully understood from a first-principles read of the failing code:
+
+1. **`gameBootskell.c` - a 2D array passed by value.** `bskVPut2S`/
+   `bskVPut2C` both took `int[BSK_VVRAM_HEIGHT][BSK_VVRAM_WIDTH] grid` as
+   their own first parameter - this dialect can't pass an array (2D or
+   otherwise) by value at all ("functions cannot pass arguments of size >
+   1"), the same restriction already documented project-wide for 1D
+   arrays. Every one of the function's own 4 real call sites always
+   passed the exact same global (`bskVVramBack` - the only VVram grid this
+   game ever has), so the parameter was pure unnecessary indirection -
+   fixed by dropping it entirely and having both functions operate
+   directly on the global.
+2. **`gameMazy2.c` - a genuine declaration-order violation**:
+   `mz2ChangeFloor()` (and the `mz2InitFloor()` it calls, itself depending
+   on two more not-yet-defined functions) was used from inside
+   `mz2MoveMan()`, defined hundreds of lines earlier in the file, with no
+   forward-declaration mechanism available to bridge the gap. Rather than
+   physically relocate the whole render/visibility dependency chain those
+   two functions need (itself several hundred lines with its own further
+   dependencies), fixed with a small deferred-action pattern: the two real
+   call sites set a `mz2FloorChangePending`/`mz2PendingFloor` pair instead
+   of calling `mz2ChangeFloor()` directly, and `mz2UpdatePlaying()`
+   (defined later, after everything needed already exists) checks and
+   actually applies it immediately after calling `mz2MoveMan()` each real
+   tick - the same real-tick timing a direct call would have had, just
+   resolved one function-call layer removed.
+3. **`gameMieyen.c` - two missing note-frequency `#define`s.** A melody
+   table referenced `MIY_F4S`/`MIY_G4S` (F4/G4 sharp), neither of which
+   had ever actually been defined anywhere in the file - a genuine
+   transcription gap, not caught by the agent's own scratch-compile since
+   its own test harness apparently didn't happen to pull in this specific
+   melody table's own compile-time reference the same way. Fixed by
+   adding both, following the exact `natural+1` numbering pattern every
+   other sharp in the same table already used (confirmed against
+   `MIY_C4S`/`MIY_A4S`, both already correctly `natural+1`).
+4. **`gameMieyen.c` - the exact `int name[N]` vs `int[N] name` array-
+   declaration mistake**, this dialect's single most common gotcha
+   throughout this whole project's history, still slipping through in a
+   freshly-written file (`bool pressed[4];` inside `miyMoveMan()`) despite
+   every porting agent's own brief explicitly calling it out.
+5. **`gameMieyen.c` - the same declaration-order bug as Mazy2's own, a
+   second time in the same file**: `miyBeginStage()`/`miyBeginTrying()`
+   were used (from the title-screen fire-press handler) before being
+   defined. Unlike Mazy2's case, both functions here were small and self-
+   contained (only depending on `miyInitStage()`/`miyInitTrying()`,
+   already defined earlier), so fixed the simpler way this time - by
+   physically relocating both function definitions to just above their
+   first real call site, and deleting the now-duplicate copies from their
+   original position.
+6. **`gameOsotos.c` - the same declaration-order bug pattern, twice more
+   in one file.** `osoStartPoint()` called `osoAddScoreForward()`, itself
+   depending on a whole "Status.cpp / Print.cpp / Sound sequencer / Score"
+   block (`osoAsciiIndex`/`osoPrintC`/`osoPrintNumber5`/`osoPrintScore`/
+   the melody-sequencer functions/`osoAddScoreForward` itself - ~290
+   lines) defined hundreds of lines later; separately, `osoInitTrying()`
+   called `osoDrawAll()`, itself depending on `osoWriteBlock2x2()`/
+   `osoDrawBackground()` defined just after it. Both fixed the same way
+   as Mieyen's own case above - relocating each whole self-contained
+   dependency chain to just before its own first real call site (verified
+   each chain's own remaining dependencies - global state, other already-
+   defined helper functions - were all satisfied at the new position
+   before moving anything), and deleting the duplicate copies left behind.
+7. **`gameBootskell.c` - a bare `0` passed where a `BskMovable*` was
+   expected.** `bskGetCellOrMovable( 0, bskBlockStartX, bskBlockStartY )`
+   - this dialect rejects an implicit int-to-pointer conversion even for
+   a literal `0`/null-pointer-constant, unlike standard C. Confirmed safe
+   to pass a genuine null here by reading every one of
+   `bskGetCellOrMovable()`'s own downstream helpers
+   (`bskIsNearMan`/`bskIsNearMovingBlock`/`bskIsNearMonster`) and
+   confirming `pMovable` is only ever *compared* (`pMovable != &bskMan`),
+   never dereferenced - fixed with an explicit `(BskMovable*)0` cast
+   rather than restructuring the call.
+
+All 7 bugs are exactly the same handful of well-established dialect
+gotchas this project has hit repeatedly before (array-by-value parameters,
+`int name[N]` vs `int[N] name`, and above all declaration order with no
+forward declarations) - a reminder that even a wave of independently-
+written, individually-test-compiled files from 21 different parallel
+agents, each given the exact same warnings up front, still needs one real
+combined build to catch what an isolated per-file scratch-compile
+structurally cannot: cross-file interactions don't exist yet at that
+point, but *within-file* ordering mistakes that happen to not be exercised
+by whatever that agent's own scratch harness compiled can still slip
+through - true here even though every one of these bugs was a pure
+single-file issue, not a cross-game collision, precisely because a
+scratch build that only ever links in "my own new file + everything
+already shipped" is still a full, real compile of that one new file in
+context, and still didn't catch bugs 2-6 above. The real, most valuable
+signal was simply running `compile src/main.c` for real, for the whole
+82-game cartridge, once all 21 files existed together.
+
+**Verified via a full rebuild** (`SKIP_V32OPT=1 Make.sh`, `BUILD
+SUCCESSFUL`) and a light Puppeteer sanity pass, matching this project's
+own now-standard lighter per-batch verification approach rather than an
+exhaustive per-game playthrough of all 21: booted the WebGL build and
+paged through all 10 menu pages with zero JS console errors, confirming
+every new title (AERIAL/ANTIAIR/ASCEND/... alphabetized correctly among
+the other 61 already-shipped games), then launched CAVIT specifically
+(the title screen rendering correctly with the same "font missing K/Y-
+style letters -> blank" precedent Cracky itself already established, then
+real gameplay - a rock-mining cave scene with SCORE/STAGE/TIME HUD all
+correctly positioned) as one concrete, fully-played proof that the whole
+architecture genuinely works end-to-end for a game beyond Cracky itself,
+not just that it compiles. The other 20 games were not individually
+launched/played this session - each one's own agent-authored header
+comment documents its own specific porting decisions, deviations, and any
+gotchas the orchestrator (or a future session) should know about before
+considering that specific game fully proven, the same "verified via
+compile, not via play, flag it honestly" discipline several of this
+project's own earlier single-game ports have used when time ran out
+before a live playthrough.
+
+## A real user-supplied hardware photo overturns Cracky's own title-screen design, and with it, a bug pattern found across nearly the whole batch
+
+After the 21-game meticulous verification pass above found real bugs in
+19 of the first 18 games checked (nearly every one involving some
+variant of "title text collides with SCORE/STAGE/TIME" or "an 8-char
+string like CONTINUE overflows an 8-column grid"), the user supplied a
+**real photograph of Cracky running on actual UIAPduino hardware** - and
+it immediately falsified the shared assumption every one of those fixes
+had been built on. The photo shows "MINI" genuinely present (several
+ports had simply dropped it as unfixable), "CONTINUE" spelled out in
+full (not the "CONTINU" truncation this project's own fix for Cracky,
+and every sibling port's own independently-arrived-at identical
+workaround, had settled on), and - most importantly - the whole layout
+using real estate far wider than an 8-column strip: "CRACKY"/"MINI" on
+one row, "START"/"TIME" on another, "CONTINUE" and "INUFUTO 2026" each
+on their own rows, all comfortably left-aligned across most of the
+screen's own width.
+
+**Re-reading Cracky's real upstream source (`Status.cpp`'s `Title()`,
+`Vram.h`) confirmed the photo and explained exactly what had been wrong
+the whole time.** `PrintC()`/`PrintS()` write to a real 16-bit "Vram"
+address (`page = addr>>8`, `column = addr & 0xFF`) that spans upstream's
+own full physical screen width - `VramStep=4` real pixels per character
+cell, 128 real pixels / 4 = a genuine **32-character-cell-wide** row, not
+8. The status labels (SCORE/STAGE/TIME/lives) really are confined to a
+narrow slice - upstream's own `LeftX=24` constant places them at columns
+24-31, the rightmost 8 cells - but every piece of the *title screen's*
+own text (the logo, "MINI" at column 18, "START"/"CONTINUE" at column 9,
+the credit line at column 12) lives at columns 8-23, well inside what
+during real gameplay is the map/VVram area, using the exact same
+`PrintC()`/`PrintS()` call with different column arguments - **there is
+no separate "status-only text zone" concept in upstream at all**, just
+one shared wide canvas with the status labels living in one corner of
+it.
+
+This project's own port, going all the way back to Cracky's original
+implementation, modeled `crkStatusChar` as an **8-column-wide grid**
+(`int[8][8]`) - correct for the status labels alone, since 8 columns
+exactly matches their own real range - but then routed the *title
+screen's* text through that same narrow grid too, reusing columns 24-31
+that the status labels also needed. This is the literal, single root
+cause of the whole recurring bug family the verification pass above kept
+finding: "CONTINUE" (8 chars starting at column 1 of an 8-wide grid)
+genuinely can't fit without overflowing one column past the end; "MINI"
+and "START" genuinely can't be placed anywhere in an 8-column grid
+without landing on the exact same columns the SCORE/STAGE/TIME labels
+already occupy. Every fix applied earlier in this batch - truncating
+CONTINUE, relocating START to a different *page*, dropping MINI/the
+credit line outright - was a real, working patch for a symptom, but
+none of them addressed the actual root design flaw, because nobody had
+yet re-read upstream's own real Vram addressing closely enough (or had
+a real photo) to realize the *columns available to title-screen text
+were never actually as narrow as the port assumed*.
+
+**Fixed in `gameCracky.c`** (the reference implementation this whole
+family follows) by widening `crkStatusChar` to `int[8][32]`, updating
+every `crkPrintStatus()`/`crkPrintScore()`/`crkPrintTime()` column
+argument to upstream's own real `LeftX=24`-based columns, and adding a
+`crkFullWidthText` flag (true only in `CRK_STATE_TITLE`) that lets
+`crkComposeRawByte()` read the full 32-column range instead of just
+columns 24-31 while the title screen is showing - `crkBeginTitle()` was
+rewritten to place "MINI"/"START"/"CONTINUE" (now the complete 8-letter
+word)/the "INUFUTO 2026" credit line at upstream's own literal columns
+(18/9/9/12 respectively), all now genuinely clear of the status labels'
+own columns 24-31, with nothing left over needing to be dropped or
+truncated. Verified via a fresh Puppeteer screenshot compared directly
+against the real hardware photo - "CRAC" (still missing K/Y, the
+already-known, unrelated font-glyph limitation)/"MINI"/"SCORE 00"/
+"STAGE 1" on their own rows, "▶START"/"TIME 0" together, "CONTINUE" and
+"INUFUTO 2026" each on their own row below - a close structural match to
+the photo.
+
+**This same architectural fix needs propagating to every sibling
+Cate-engine game in the batch** - the identical `[8][8]`-grid design was
+copied from Cracky into essentially every one of the 21 ports before
+this was discovered, so any earlier "fix" in this batch that trimmed,
+relocated, or dropped title-screen text (rather than widening the grid)
+inherited the same root flaw. See each individual game's own header
+comment for whether/how this was subsequently corrected there.
+
+## A toast/status-badge system for the sound and pixel-grid toggles, ported from the sibling gamebuino_classic_vircon32 project
+
+Ported directly from the sibling `gamebuino_classic_vircon32` project's own
+identically-shaped feature, on direct request: two mechanisms, both new to
+this project. A short-lived **toast** (`showStatusToast()`/
+`drawStatusToast()`, `src/portVircon32.c`) is drawn over whatever is
+already on screen for one real second (`STATUS_TOAST_FRAMES = 60`) the
+instant Button Y (sound) or Button X (pixel grid) is toggled, so a mid-game
+press is acknowledged rather than leaving the player guessing whether it
+registered - reusing the exact same message text as the sibling project
+("SOUND ON"/"SOUND OFF"/"PIXEL GRID ON"/"PIXEL GRID OFF") and the same
+`md_drawSolidRect()`-based bordered-box look already established here for
+the quit-confirmation dialog. Separately, a permanent **status badge row**
+(`md_drawToggleStatusIcons()`, called from `menu.c` right after the title/
+hint lines) shows both toggles' current state in the menu's own top-right
+corner - menu only, since during gameplay the screen belongs to the game
+and the toast is what reports a change there instead. This project has no
+equivalent of that project's own third "real gray color" toggle at all
+(confirmed directly - neither project has any glow/CRT-scanline effects
+either, only the one pixel-grid overlay each), so the badge row here is
+just the two toggles, laid out identically to the sibling's own minus its
+middle GRAY badge.
+
+**A real, wrong assumption made and then corrected mid-session**: the
+sibling's own `drawStatusBadge()` shows an enabled toggle in bright white
+text and a disabled one in dark gray - the very first port of this
+function here assumed that color wasn't available at all, reasoning (from
+a project-wide grep finding zero `color_gray`/`color_darkgray` usage
+anywhere in this codebase) that this project's whole rendering model is
+monochrome black/white only, matching the real SSD1306 OLED it targets.
+That grep only proved this project had never *used* gray before, not that
+Vircon32 doesn't *have* it - reading `video.h` directly (only done after
+the user pushed back twice) confirmed `color_gray`/`color_darkgray`/
+`color_lightgray` are genuine, ordinary constants sitting right next to
+`color_black`/`color_white`, available unconditionally: this badge is
+drawn through the BIOS text/rect API (`print_at`/`md_drawSolidRect`+
+`set_multiply_color`), a full-color layer entirely separate from the
+256-tile monochrome column atlas every actual *game* draws through - the
+"no gray" constraint that's real for game rendering was never a real
+constraint for this menu-only UI layer at all. Two wrong intermediate
+designs were tried and reverted before landing on the correct one: first
+a `"SND[X]"`/`"SND[ ]"` bracket-checkbox notation (worked, but visibly
+diverged from the sibling's own plain-text badges); then a solid white
+filled pill with black text for "on" vs plain white text for "off" (a
+real, reasoned attempt at an on/off distinction using only the two colors
+believed available, but still not what was asked for once gray turned out
+to exist). **Fixed** with `drawStatusBadge()` now a genuinely verbatim
+port of the sibling's own function - `set_multiply_color(color_white)`
+when enabled, `set_multiply_color(color_darkgray)` when disabled, plain
+`print_at()`, no rectangle at all.
+
+**A real bug found and fixed along the way, not present in the sibling
+project at all**: the toast's own box/text get drawn directly into the
+same persistent GPU display buffer as everything else in this project
+(matching every other "the screen doesn't erase itself" finding already
+documented throughout this file) - once `statusToastFrames` counts down
+to 0 and `drawStatusToast()` stops drawing it, those pixels don't erase
+themselves. The menu and the quit-confirmation dialog both already redraw
+their own whole screen unconditionally every single frame
+(`menu_update()`'s own `clear_screen()` call; `drawConfirmQuitDialog()`
+called every tick the dialog is up), so a toast shown over either of
+those is naturally painted over on the very next frame with no extra
+effort - but real gameplay is the one case (flagged directly by the user
+before any code was written) that needs this forced explicitly: several
+games skip their own redraw on frames where nothing changed internally
+(the same `obonoCoreShim`-lineage `isInvalid`-gated skip already
+documented for the quit dialog and the pixel-grid toggle itself
+elsewhere in this file), so without forcing one, a toast could leave its
+own stale box sitting on screen forever once it stops being drawn.
+**Fixed** by tracking whether the toast was showing on the *previous*
+frame (`statusToastWasShowing`) separately from `drawStatusToast()`
+itself, and forcing one `menu_getGame(currentGameIndex)->onResume()`
+redraw on the exact tick it transitions from showing to not-showing
+(gated to `currentGameIndex != -1 && !confirmingQuit`, the same
+condition the pixel-grid toggle's own forced redraw already uses) -
+called *before* `drawStatusToast()` runs that frame, so the forced
+redraw lands first and the (now not-drawing) toast call can't undo it.
+
+**The pixel-grid toggle was also changed to work from the menu itself**,
+on direct follow-up request, matching the sibling project's own explicit
+design there ("the toggle is accepted everywhere... flipping it there is
+a real, visible action that simply takes effect once a game is
+launched") - previously Button X's own press was only ever read while
+`currentGameIndex != -1 && !confirmingQuit`, exactly like the overlay's
+own render gate, so toggling it from the menu was a silent no-op. Now the
+button is read every frame unconditionally (matching the sound toggle's
+own already-unconditional shape), with only the *forced-redraw* call
+still gated to `currentGameIndex != -1 && !confirmingQuit` - toggling
+from the menu changes state and shows a toast immediately, and the
+overlay itself still only actually draws once a game is running.
+
+Verified via Puppeteer throughout, including the specific case the user
+flagged before any code was written: launched NumberPlace (an
+`obonoCoreShim`-lineage game already known to skip its own redraw when
+idle), toggled the pixel grid on, and let its toast expire untouched -
+zero stale box artifact left behind - then repeated the same test
+toggling the grid back off. Also confirmed both badges independently
+show their correct bright-white/dark-gray state on the menu in every
+combination, and that toggling the grid from the menu itself now shows
+both the toast and the updated badge with no game running.
+
+## Prior art in this codebase / author's other projects
+
+- **crisp-game-lib-portable (SDL port)** — precedent for the "one binary,
+  many games, shared menu" structure this project follows.
+- **playdate-arduboy / srcstub** — closest existing precedent for writing a
+  compatibility shim that reimplements a small monochrome-OLED game API on
+  top of a different target's real hardware.
+- **v32opt** — Vircon32 assembly-level optimizer project; useful reference
+  for how the Vircon32 compiler's generated code behaves, in case
+  performance tuning is needed for any of the ported games.
+
+## References
+
+- https://www.tinyjoypad.com/tinyjoypad_attiny85
+- https://www.vircon32.com/ — home, specs, C API reference, dev tools
+- https://www.vircon32.com/api/video.html — GPU/drawing API reference
